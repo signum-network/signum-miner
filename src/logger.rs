@@ -44,7 +44,7 @@ pub fn init_logger(cfg: &Cfg) -> log4rs::Handle {
 
     let roller = FixedWindowRoller::builder()
         .base(1)
-        .build("log/scavenger.{}.log", cfg.logfile_max_count)
+        .build("log/signum-miner.{}.log", cfg.logfile_max_count)
         .unwrap();
     let trigger = SizeTrigger::new(&cfg.logfile_max_size * 1024 * 1024);
     let policy = Box::new(CompoundPolicy::new(Box::new(trigger), Box::new(roller)));
@@ -61,7 +61,7 @@ pub fn init_logger(cfg: &Cfg) -> log4rs::Handle {
     } else {
         let logfile = RollingFileAppender::builder()
             .encoder(Box::new(PatternEncoder::new(&logfile_log_pattern)))
-            .build("log/scavenger.1.log", policy)
+            .build("log/signum-miner.1.log", policy)
             .unwrap();
         Config::builder()
             .appender(

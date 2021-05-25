@@ -1,15 +1,20 @@
-account_id_to_secret_phrase:                   # define accounts and passphrases for solo mining 
+# Define accounts and passphrases (for solo mining only, NEVER put your passphrase here for pool mining)
+account_id_to_secret_phrase:
   10282355196851764065: 'glad suffer red during single glow shut slam hill death lust although'  
   1796535821016683299: 'stand rude those door invite reflection anywhere lace safe hidden fur horrible'  
 
+# List of directories with your plot files, adjust to suit your disks
 plot_dirs:
-   - 'test_data'
-#  - 'C:\second\windows\plot\dir'
-#  - '/first/linux/plot/dir'
-#  - '/second/linux/plot/dir'
+  - 'D:\plot\dir'             # Sample Windows directory
+  - 'E:\plot\dir'             # Sample Windows directory
+  - '/mnt/hd1/plot/dir'       # Sample Linux directory
+  - '/mnt/hd1/plot/dir'       # Sample Linux directory
 
-url: 'http://50-50-pool.burst.cryptoguru.org:8124'  # cryptoguru 50-50 pool
-#url: 'http://dummypool.megash.it'                  # dummypool with constant scoop number for benchmarking
+url: 'https://pool.burstcoin.ro'      # mainnet pool
+#url: 'http://nivbox.co.uk:9000'      # testnet pool
+#url: 'http://localhost:8125'         # solo mining
+#url: 'http://localhost:8125'         # solo mining testnet
+#url: 'http://localhost:6876'         # solo mining testnet
 
 hdd_reader_thread_count: 0            # default 0 (=auto: number of disks)
 hdd_use_direct_io: true               # default true
@@ -36,6 +41,7 @@ account_id_to_target_deadline:        # target dls for multi-id (optional)
 get_mining_info_interval: 3000        # default 3000ms
 timeout: 5000                         # default 5000ms
 send_proxy_details: true              # default false
+submit_only_best: true                # default true
 #additional_headers:                  # add/overwrite html header
 #  "AccountKey" : "1234567890"
 

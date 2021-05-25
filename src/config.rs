@@ -106,6 +106,9 @@ pub struct Cfg {
     #[serde(default = "default_show_drive_stats")]
     pub show_drive_stats: bool,
 
+    #[serde(default = "default_submit_only_best")]
+    pub submit_only_best: bool,
+
     pub benchmark_only: Option<Benchmark>,
 }
 
@@ -237,6 +240,10 @@ fn default_show_progress() -> bool {
 
 fn default_show_drive_stats() -> bool {
     false
+}
+
+fn default_submit_only_best() -> bool {
+    true
 }
 
 pub fn load_cfg(config: &str) -> Cfg {

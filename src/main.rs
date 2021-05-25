@@ -95,7 +95,7 @@ cfg_if! {
 }
 
 fn main() {
-    let arg = App::new("Scavenger - a PoC miner")
+    let arg = App::new("signum-miner")
         .version(crate_version!())
         .author(crate_authors!())
         .about(crate_description!())
@@ -123,7 +123,7 @@ fn main() {
     let cfg_loaded = load_cfg(config);
     logger::init_logger(&cfg_loaded);
 
-    info!("Scavenger v.{}", crate_version!());
+    info!("signum-miner v.{}", crate_version!());
     #[cfg(feature = "opencl")]
     info!("GPU extensions: OpenCL");
 

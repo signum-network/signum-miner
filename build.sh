@@ -25,8 +25,8 @@ function download_sources {
 	else
 		branch="${1}"
 	fi
-	git clone https://github.com/PoC-Consortium/scavenger.git -b "${branch}"
-	cd scavenger
+	git clone https://github.com/signum-network/signum-miner.git -b "${branch}"
+	cd signum-miner
 	export BUILDSTR=$(git log --pretty=format:'%h' -n 1)
 }
 
@@ -37,10 +37,10 @@ function build_and_pack {
 		echo "build done successfully!"
 	fi
 	mkdir output
-	cp target/release/scavenger output/
+	cp target/release/signum-miner output/
 	cp config.yaml output/
 	cp build.log output/
-	tar cfz "scavenger-${OSSTRING}-${BUILDSTR}.tar.gz" output
+	tar cfz "signum-miner-${OSSTRING}-${BUILDSTR}.tar.gz" output
 } 
 
 if [[ $(uname -a) =~ Darwin ]]

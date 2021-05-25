@@ -123,7 +123,7 @@ impl RequestHandler {
             *secret_phrase = byte_serialize(secret_phrase.as_bytes()).collect();
         }
 
-        let ua = "Scavenger/".to_owned() + crate_version!();
+        let ua = "signum-miner/".to_owned() + crate_version!();
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("User-Agent", ua.to_owned().parse().unwrap());
@@ -139,7 +139,7 @@ impl RequestHandler {
             );
             headers.insert(
                 "X-Plotfile",
-                ("ScavengerProxy/".to_owned()
+                ("signum-miner-proxy/".to_owned()
                     + &*hostname::get_hostname().unwrap_or_else(|| "".to_owned()))
                     .parse()
                     .unwrap(),
