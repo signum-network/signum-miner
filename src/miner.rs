@@ -586,7 +586,7 @@ impl Miner {
                                 );
 
                                 // Submit now our best one, if configured that way
-                                if best_nonce_data.height != 0 {
+                                if best_nonce_data.height == state.height {
                                     let deadline = best_nonce_data.deadline / best_nonce_data.base_target;
                                     inner_executor.spawn(request_handler.submit_nonce(
                                         best_nonce_data.account_id,
