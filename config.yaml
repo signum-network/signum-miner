@@ -1,7 +1,9 @@
-# Define accounts and passphrases (for solo mining only, NEVER put your passphrase here for pool mining)
-account_id_to_secret_phrase:
-  10282355196851764065: 'glad suffer red during single glow shut slam hill death lust although'  
-  1796535821016683299: 'stand rude those door invite reflection anywhere lace safe hidden fur horrible'  
+# PLEASE ONLY ENTER YOUR PASSPHRASE BELOW IF YOU ARE GOING TO MINE SOLO!
+# YOU DO NOT NEED TO ENTER YOUR PASSPHRASE FOR POOL MINING.
+# NEVER POST YOUR CONFIG.YAML INCLUDING YOUR PASSPHRASE TO ANY BOARD OR CHAT!
+account_id_to_secret_phrase:          # define accounts and passphrases for solo mining 
+  10282355196851764065: 'glad suffer red during single glow shut slam hill death lust although'          # Bold's example wallet
+  1796535821016683299: 'stand rude those door invite reflection anywhere lace safe hidden fur horrible'  # Johnny's example wallet
 
 # List of directories with your plot files, adjust to suit your disks
 plot_dirs:
@@ -33,9 +35,9 @@ gpu_nonces_per_cache: 262144          # default 262144
 gpu_mem_mapping: false                # default false
 gpu_async: false                      # default false
 
-target_deadline: 18446744073709551615 # default u32::MAX
+target_deadline: 31536000             # default 31536000 (1 year)
 account_id_to_target_deadline:        # target dls for multi-id (optional)
- 10282355196851764065: 18446744073709551615
+ 10282355196851764065: 600000
  1796535821016683299: 55555555
 
 get_mining_info_interval: 3000        # default 3000ms

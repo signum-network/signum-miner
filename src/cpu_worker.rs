@@ -5,7 +5,7 @@ use crossbeam_channel::{Receiver, Sender};
 use futures::sync::mpsc;
 use futures::{Future, Sink};
 #[cfg(any(feature = "simd", feature = "neon"))]
-use libc::{c_void, uint64_t};
+use libc::{c_void};
 use std::u64;
 
 cfg_if! {
@@ -13,34 +13,34 @@ cfg_if! {
         extern "C" {
             pub fn find_best_deadline_avx512f(
                 scoops: *mut c_void,
-                nonce_count: uint64_t,
+                nonce_count: u64,
                 gensig: *const c_void,
-                best_deadline: *mut uint64_t,
-                best_offset: *mut uint64_t,
+                best_deadline: *mut u64,
+                best_offset: *mut u64,
             ) -> ();
 
             pub fn find_best_deadline_avx2(
                 scoops: *mut c_void,
-                nonce_count: uint64_t,
+                nonce_count: u64,
                 gensig: *const c_void,
-                best_deadline: *mut uint64_t,
-                best_offset: *mut uint64_t,
+                best_deadline: *mut u64,
+                best_offset: *mut u64,
             ) -> ();
 
             pub fn find_best_deadline_avx(
                 scoops: *mut c_void,
-                nonce_count: uint64_t,
+                nonce_count: u64,
                 gensig: *const c_void,
-                best_deadline: *mut uint64_t,
-                best_offset: *mut uint64_t,
+                best_deadline: *mut u64,
+                best_offset: *mut u64,
             ) -> ();
 
             pub fn find_best_deadline_sse2(
                 scoops: *mut c_void,
-                nonce_count: uint64_t,
+                nonce_count: u64,
                 gensig: *const c_void,
-                best_deadline: *mut uint64_t,
-                best_offset: *mut uint64_t,
+                best_deadline: *mut u64,
+                best_offset: *mut u64,
             ) -> ();
         }
     }
@@ -51,10 +51,10 @@ cfg_if! {
         extern "C" {
             pub fn find_best_deadline_neon(
                 scoops: *mut c_void,
-                nonce_count: uint64_t,
+                nonce_count: u64,
                 gensig: *const c_void,
-                best_deadline: *mut uint64_t,
-                best_offset: *mut uint64_t,
+                best_deadline: *mut u64,
+                best_offset: *mut u64,
             ) -> ();
         }
     }
@@ -64,7 +64,7 @@ pub fn create_cpu_worker_task(
     benchmark: bool,
     thread_pool: rayon::ThreadPool,
     rx_read_replies: Receiver<ReadReply>,
-    tx_empty_buffers: Sender<Box<Buffer + Send>>,
+    tx_empty_buffers: Sender<Box<dyn Buffer + Send>>,
     tx_nonce_data: mpsc::Sender<NonceData>,
 ) -> impl FnOnce() {
     move || {
@@ -83,7 +83,7 @@ pub fn create_cpu_worker_task(
 
 pub fn hash(
     read_reply: ReadReply,
-    tx_empty_buffers: Sender<Box<Buffer + Send>>,
+    tx_empty_buffers: Sender<Box<dyn Buffer + Send>>,
     tx_nonce_data: mpsc::Sender<NonceData>,
     benchmark: bool,
 ) -> impl FnOnce() {
@@ -98,6 +98,7 @@ pub fn hash(
                     .clone()
                     .send(NonceData {
                         height: read_reply.info.height,
+                        block: read_reply.info.block,
                         base_target: read_reply.info.base_target,
                         deadline,
                         nonce: 0,
@@ -117,7 +118,7 @@ pub fn hash(
         if read_reply.info.len == 1 && read_reply.info.gpu_signal > 0 {
             return;
         }
-        
+
         #[allow(unused_assignments)]
         let mut deadline: u64 = u64::MAX;
         #[allow(unused_assignments)]
@@ -210,6 +211,7 @@ pub fn hash(
             .clone()
             .send(NonceData {
                 height: read_reply.info.height,
+                block: read_reply.info.block,
                 base_target: read_reply.info.base_target,
                 deadline,
                 nonce: offset + read_reply.info.start_nonce,
@@ -228,6 +230,8 @@ pub fn hash(
 mod tests {
     use crate::poc_hashing::find_best_deadline_rust;
     use hex;
+    #[cfg(any(feature = "simd", feature = "neon"))]
+    use libc::{c_void};
     use std::u64;
 
     cfg_if! {
@@ -239,34 +243,34 @@ mod tests {
                 pub fn init_shabal_sse2() -> ();
                 pub fn find_best_deadline_avx512f(
                     scoops: *mut c_void,
-                    nonce_count: uint64_t,
+                    nonce_count: u64,
                     gensig: *const c_void,
-                    best_deadline: *mut uint64_t,
-                    best_offset: *mut uint64_t,
+                    best_deadline: *mut u64,
+                    best_offset: *mut u64,
                 ) -> ();
 
                 pub fn find_best_deadline_avx2(
                     scoops: *mut c_void,
-                    nonce_count: uint64_t,
+                    nonce_count: u64,
                     gensig: *const c_void,
-                    best_deadline: *mut uint64_t,
-                    best_offset: *mut uint64_t,
+                    best_deadline: *mut u64,
+                    best_offset: *mut u64,
                 ) -> ();
 
                 pub fn find_best_deadline_avx(
                     scoops: *mut c_void,
-                    nonce_count: uint64_t,
+                    nonce_count: u64,
                     gensig: *const c_void,
-                    best_deadline: *mut uint64_t,
-                    best_offset: *mut uint64_t,
+                    best_deadline: *mut u64,
+                    best_offset: *mut u64,
                 ) -> ();
 
                 pub fn find_best_deadline_sse2(
                     scoops: *mut c_void,
-                    nonce_count: uint64_t,
+                    nonce_count: u64,
                     gensig: *const c_void,
-                    best_deadline: *mut uint64_t,
-                    best_offset: *mut uint64_t,
+                    best_deadline: *mut u64,
+                    best_offset: *mut u64,
                 ) -> ();
             }
         }
@@ -278,10 +282,10 @@ mod tests {
             pub fn init_shabal_neon() -> ();
             pub fn find_best_deadline_neon(
                     scoops: *mut c_void,
-                    nonce_count: uint64_t,
+                    nonce_count: u64,
                     gensig: *const c_void,
-                    best_deadline: *mut uint64_t,
-                    best_offset: *mut uint64_t,
+                    best_deadline: *mut u64,
+                    best_offset: *mut u64,
                 ) -> ();
         }
     }
@@ -293,9 +297,9 @@ mod tests {
         let gensig =
             hex::decode("4a6f686e6e7946464d206861742064656e206772f6df74656e2050656e697321")
                 .unwrap();
-        
+
         let mut gensig_array = [0u8; 32];
-        gensig_array.copy_from_slice(&gensig[..]); 
+        gensig_array.copy_from_slice(&gensig[..]);
 
         let winner: [u8; 64] = [0; 64];
         let loser: [u8; 64] = [5; 64];
@@ -375,19 +379,13 @@ mod tests {
                         &mut offset,
                     );
                     assert_eq!(3084580316385335914u64, deadline);
-                    deadline = u64::MAX;
-                    offset = 0;
                 }
-                find_best_deadline_sph(
-                    data.as_ptr() as *mut c_void,
-                    (i + 1) as u64,
-                    gensig.as_ptr() as *const c_void,
-                    &mut deadline,
-                    &mut offset,
-                );
+                let mut gensig_array = [0; 32];
+                gensig_array.copy_from_slice(&gensig[..gensig.len()]);
+                let result = find_best_deadline_rust(&data, (i + 1) as u64, &gensig_array);
+                deadline = result.0;
+                offset = result.1;
                 assert_eq!(3084580316385335914u64, deadline);
-                deadline = u64::MAX;
-                offset = 0;
             }
             data[i * 64..i * 64 + 64].clone_from_slice(&loser);
         }

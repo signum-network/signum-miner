@@ -1,5 +1,7 @@
+use crate::com::api::MiningInfoResponse as MiningInfo;
 use crate::config::Cfg;
 use crate::cpu_worker::create_cpu_worker_task;
+use crate::future::interval::Interval;
 #[cfg(feature = "opencl")]
 use crate::gpu_worker::create_gpu_worker_task;
 #[cfg(feature = "opencl")]
@@ -25,12 +27,11 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::u64;
 use stopwatch::Stopwatch;
 use tokio::prelude::*;
 use tokio::runtime::TaskExecutor;
-use tokio::timer::Interval;
 
 pub struct Miner {
     reader: Reader,
@@ -48,20 +49,70 @@ pub struct Miner {
 
 pub struct State {
     generation_signature: String,
+    generation_signature_bytes: [u8; 32],
     height: u64,
+    block: u64,
     account_id_to_best_deadline: HashMap<u64, u64>,
     server_target_deadline: u64,
     base_target: u64,
     sw: Stopwatch,
     scanning: bool,
     processed_reader_tasks: usize,
+    scoop: u32,
     first: bool,
     outage: bool,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            generation_signature: "".to_owned(),
+            height: 0,
+            block: 0,
+            scoop: 0,
+            account_id_to_best_deadline: HashMap::new(),
+            server_target_deadline: u64::MAX,
+            base_target: 1,
+            processed_reader_tasks: 0,
+            sw: Stopwatch::new(),
+            generation_signature_bytes: [0; 32],
+            scanning: false,
+            first: true,
+            outage: false,
+        }
+    }
+
+    fn update_mining_info(&mut self, mining_info: &MiningInfo) {
+        for best_deadlines in self.account_id_to_best_deadline.values_mut() {
+            *best_deadlines = u64::MAX;
+        }
+        self.height = mining_info.height;
+        self.block += 1;
+        self.base_target = mining_info.base_target;
+        self.server_target_deadline = mining_info.target_deadline;
+
+        self.generation_signature_bytes =
+            poc_hashing::decode_gensig(&mining_info.generation_signature);
+        self.generation_signature = mining_info.generation_signature.clone();
+
+        let scoop =
+            poc_hashing::calculate_scoop(mining_info.height, &self.generation_signature_bytes);
+        info!(
+            "{: <80}",
+            format!("new block: height={}, scoop={}", mining_info.height, scoop)
+        );
+        self.scoop = scoop;
+
+        self.sw.restart();
+        self.processed_reader_tasks = 0;
+        self.scanning = true;
+    }
 }
 
 #[derive(Copy, Clone)]
 pub struct NonceData {
     pub height: u64,
+    pub block: u64,
     pub base_target: u64,
     pub deadline: u64,
     pub nonce: u64,
@@ -304,7 +355,7 @@ impl Miner {
         for _ in 0..cpu_buffer_count {
             let cpu_buffer = CpuBuffer::new(buffer_size_cpu);
             tx_empty_buffers
-                .send(Box::new(cpu_buffer) as Box<Buffer + Send>)
+                .send(Box::new(cpu_buffer) as Box<dyn Buffer + Send>)
                 .unwrap();
         }
 
@@ -319,7 +370,7 @@ impl Miner {
             {
                 let gpu_buffer = GpuBuffer::new(&context.clone(), i + 1);
                 tx_empty_buffers
-                    .send(Box::new(gpu_buffer) as Box<Buffer + Send>)
+                    .send(Box::new(gpu_buffer) as Box<dyn Buffer + Send>)
                     .unwrap();
             }
         }
@@ -390,24 +441,12 @@ impl Miner {
                 cfg.url,
                 cfg.account_id_to_secret_phrase,
                 cfg.timeout,
-                // ensure timeout < polling intervall
-                min(cfg.timeout, max(1000, cfg.get_mining_info_interval) - 200),
                 (total_size * 4 / 1024 / 1024) as usize,
                 cfg.send_proxy_details,
                 cfg.additional_headers,
+                executor.clone(),
             ),
-            state: Arc::new(Mutex::new(State {
-                generation_signature: "".to_owned(),
-                height: 0,
-                account_id_to_best_deadline: HashMap::new(),
-                server_target_deadline: u64::MAX,
-                base_target: 1,
-                processed_reader_tasks: 0,
-                sw: Stopwatch::new(),
-                scanning: false,
-                first: true,
-                outage: false,
-            })),
+            state: Arc::new(Mutex::new(State::new())),
             // floor at 1s to protect servers
             get_mining_info_interval: max(1000, cfg.get_mining_info_interval),
             executor,
@@ -429,90 +468,63 @@ impl Miner {
         let get_mining_info_interval = self.get_mining_info_interval;
         let wakeup_after = self.wakeup_after;
         self.executor.clone().spawn(
-            Interval::new(
-                Instant::now(),
-                Duration::from_millis(get_mining_info_interval),
-            )
-            .for_each(move |_| {
-                let state = state.clone();
-                let reader = reader.clone();
-                request_handler.get_mining_info().then(move |mining_info| {
-                    match mining_info {
-                        Ok(mining_info) => {
-                            let mut state = state.lock().unwrap();
-                            state.first = false;
-                            if state.outage {
-                                error!("{: <80}", "outage resolved.");
-                                state.outage = false;
-                            }
-                            if mining_info.generation_signature != state.generation_signature {
-                                for best_deadlines in state.account_id_to_best_deadline.values_mut()
-                                {
-                                    *best_deadlines = u64::MAX;
-                                }
-                                state.height = mining_info.height;
-                                state.base_target = mining_info.base_target;
-                                state.server_target_deadline = mining_info.target_deadline;
-
-                                let gensig =
-                                    poc_hashing::decode_gensig(&mining_info.generation_signature);
-                                state.generation_signature = mining_info.generation_signature;
-
-                                let scoop =
-                                    poc_hashing::calculate_scoop(mining_info.height, &gensig);
-                                info!(
-                                    "{: <80}",
-                                    format!(
-                                        "new block: height={}, scoop={}",
-                                        mining_info.height, scoop
-                                    )
-                                );
-
-                                state.sw.restart();
-                                state.processed_reader_tasks = 0;
-                                state.scanning = true;
-
-                                drop(state);
-
-                                reader.lock().unwrap().start_reading(
-                                    mining_info.height,
-                                    mining_info.base_target,
-                                    scoop,
-                                    &Arc::new(gensig),
-                                );
-                            } else if !state.scanning
-                                && wakeup_after != 0
-                                && state.sw.elapsed_ms() > wakeup_after
-                            {
-                                info!("HDD, wakeup!");
-                                reader.lock().unwrap().wakeup();
-                                state.sw.restart();
-                            }
-                        }
-                        _ => {
-                            let mut state = state.lock().unwrap();
-                            if state.first {
-                                error!(
-                                    "{: <80}",
-                                    "error getting mining info, please check server config"
-                                );
+            Interval::new_interval(Duration::from_millis(get_mining_info_interval))
+                .for_each(move |_| {
+                    let state = state.clone();
+                    let reader = reader.clone();
+                    request_handler.get_mining_info().then(move |mining_info| {
+                        match mining_info {
+                            Ok(mining_info) => {
+                                let mut state = state.lock().unwrap();
                                 state.first = false;
-                                state.outage = true;
-                            } else {
-                                if !state.outage {
+                                if state.outage {
+                                    error!("{: <80}", "outage resolved.");
+                                    state.outage = false;
+                                }
+                                if mining_info.generation_signature != state.generation_signature {
+                                    state.update_mining_info(&mining_info);
+
+                                    reader.lock().unwrap().start_reading(
+                                        mining_info.height,
+                                        state.block,
+                                        mining_info.base_target,
+                                        state.scoop,
+                                        &Arc::new(state.generation_signature_bytes),
+                                    );
+                                    drop(state);
+                                } else if !state.scanning
+                                    && wakeup_after != 0
+                                    && state.sw.elapsed_ms() > wakeup_after
+                                {
+                                    info!("HDD, wakeup!");
+                                    reader.lock().unwrap().wakeup();
+                                    state.sw.restart();
+                                }
+                            }
+                            _ => {
+                                let mut state = state.lock().unwrap();
+                                if state.first {
                                     error!(
                                         "{: <80}",
-                                        "error getting mining info => connection outage..."
+                                        "error getting mining info, please check server config"
                                     );
+                                    state.first = false;
+                                    state.outage = true;
+                                } else {
+                                    if !state.outage {
+                                        error!(
+                                            "{: <80}",
+                                            "error getting mining info => connection outage..."
+                                        );
+                                    }
+                                    state.outage = true;
                                 }
-                                state.outage = true;
                             }
                         }
-                    }
-                    future::ok(())
+                        future::ok(())
+                    })
                 })
-            })
-            .map_err(|e| panic!("interval errored: err={:?}", e)),
+                .map_err(|e| panic!("interval errored: err={:?}", e)),
         );
 
         // only start submitting nonces after a while

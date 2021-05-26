@@ -66,7 +66,8 @@ cfg_if! {
                 }
             }
             if sector_size == 0 {
-                panic!("Abort: Unable to determine disk physical sector size from diskutil info")
+                sector_size = 4096;
+                warn!("Abort: Unable to determine disk physical sector size from diskutil info. Using default 4096")
             }
             sector_size
         }
@@ -79,9 +80,10 @@ cfg_if! {
                 .arg("-o")
                 .arg("PHY-SeC")
                 .output()
-                .expect("failed to execute 'lsblk -o PHY-SeC'");
+                .map(|output| output.stdout)
+                .unwrap_or_default();
 
-            let sector_size = String::from_utf8(output.stdout).expect("not utf8");
+            let sector_size = String::from_utf8(output).expect("not utf8");
             let sector_size = sector_size.split('\n').collect::<Vec<&str>>().get(1).unwrap_or_else(|| {
                 warn!("failed to determine sector size, defaulting to 4096.");
                 &"4096"
@@ -100,7 +102,7 @@ cfg_if! {
             }
         }
     } else {
-        extern crate winapi;
+        use winapi;
         use crate::utils::winapi::um::processthreadsapi::SetThreadIdealProcessor;
         use crate::utils::winapi::um::processthreadsapi::GetCurrentThread;
         use std::os::windows::ffi::OsStrExt;
