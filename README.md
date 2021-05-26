@@ -18,7 +18,8 @@ cargo install signum-miner
 ```
 
 ### Development Requirements
-- new version of rust, stable toolchain
+
+Rust stable toolchain, https://www.rust-lang.org/tools/install.
 
 ### Compile, test, ...
 
