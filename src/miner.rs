@@ -530,6 +530,7 @@ impl Miner {
         // only start submitting nonces after a while
         let mut best_nonce_data = NonceData {
             height: 0,
+            block: 0,
             base_target: 0,
             deadline: 0,
             nonce: 0,
@@ -542,7 +543,6 @@ impl Miner {
         let request_handler = self.request_handler.clone();
         let state = self.state.clone();
         let reader_task_count = self.reader_task_count;
-        let inner_executor = self.executor.clone();
         let inner_submit_only_best = self.submit_only_best;
         self.executor.clone().spawn(
             self.rx_nonce_data
@@ -572,13 +572,15 @@ impl Miner {
                                 best_nonce_data = nonce_data.clone();
                             }
                             else {
-                                inner_executor.spawn(request_handler.submit_nonce(
+                                request_handler.submit_nonce(
                                     nonce_data.account_id,
                                     nonce_data.nonce,
                                     nonce_data.height,
+                                    nonce_data.block,
                                     nonce_data.deadline,
                                     deadline,
-                                ));
+                                    state.generation_signature_bytes,
+                                );
                             }
                         }
 
@@ -600,13 +602,15 @@ impl Miner {
                                 // Submit now our best one, if configured that way
                                 if best_nonce_data.height == state.height {
                                     let deadline = best_nonce_data.deadline / best_nonce_data.base_target;
-                                    inner_executor.spawn(request_handler.submit_nonce(
+                                    request_handler.submit_nonce(
                                         best_nonce_data.account_id,
                                         best_nonce_data.nonce,
                                         best_nonce_data.height,
+                                        best_nonce_data.block,
                                         best_nonce_data.deadline,
                                         deadline,
-                                    ));
+                                        state.generation_signature_bytes,
+                                    );
                                 }
 
                                 state.sw.restart();
