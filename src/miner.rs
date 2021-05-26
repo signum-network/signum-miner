@@ -44,6 +44,7 @@ pub struct Miner {
     get_mining_info_interval: u64,
     executor: TaskExecutor,
     wakeup_after: i64,
+    submit_only_best: bool,
 }
 
 pub struct State {
@@ -108,6 +109,7 @@ impl State {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct NonceData {
     pub height: u64,
     pub block: u64,
@@ -449,6 +451,7 @@ impl Miner {
             get_mining_info_interval: max(1000, cfg.get_mining_info_interval),
             executor,
             wakeup_after: cfg.hdd_wakeup_after * 1000, // ms -> s
+            submit_only_best : cfg.submit_only_best,
         }
     }
 
@@ -524,15 +527,28 @@ impl Miner {
                 .map_err(|e| panic!("interval errored: err={:?}", e)),
         );
 
+        // only start submitting nonces after a while
+        let mut best_nonce_data = NonceData {
+            height: 0,
+            base_target: 0,
+            deadline: 0,
+            nonce: 0,
+            reader_task_processed: false,
+            account_id: 0,
+        };
+
         let target_deadline = self.target_deadline;
         let account_id_to_target_deadline = self.account_id_to_target_deadline;
         let request_handler = self.request_handler.clone();
         let state = self.state.clone();
         let reader_task_count = self.reader_task_count;
+        let inner_executor = self.executor.clone();
+        let inner_submit_only_best = self.submit_only_best;
         self.executor.clone().spawn(
             self.rx_nonce_data
                 .for_each(move |nonce_data| {
                     let mut state = state.lock().unwrap();
+
                     let deadline = nonce_data.deadline / nonce_data.base_target;
                     if state.height == nonce_data.height {
                         let best_deadline = *state
@@ -551,15 +567,19 @@ impl Miner {
                             state
                                 .account_id_to_best_deadline
                                 .insert(nonce_data.account_id, deadline);
-                            request_handler.submit_nonce(
-                                nonce_data.account_id,
-                                nonce_data.nonce,
-                                nonce_data.height,
-                                nonce_data.block,
-                                nonce_data.deadline,
-                                deadline,
-                                state.generation_signature_bytes,
-                            );
+                            
+                            if inner_submit_only_best {
+                                best_nonce_data = nonce_data.clone();
+                            }
+                            else {
+                                inner_executor.spawn(request_handler.submit_nonce(
+                                    nonce_data.account_id,
+                                    nonce_data.nonce,
+                                    nonce_data.height,
+                                    nonce_data.deadline,
+                                    deadline,
+                                ));
+                            }
                         }
 
                         if nonce_data.reader_task_processed {
@@ -576,6 +596,19 @@ impl Miner {
                                             / state.sw.elapsed_ms() as f64
                                     )
                                 );
+
+                                // Submit now our best one, if configured that way
+                                if best_nonce_data.height == state.height {
+                                    let deadline = best_nonce_data.deadline / best_nonce_data.base_target;
+                                    inner_executor.spawn(request_handler.submit_nonce(
+                                        best_nonce_data.account_id,
+                                        best_nonce_data.nonce,
+                                        best_nonce_data.height,
+                                        best_nonce_data.deadline,
+                                        deadline,
+                                    ));
+                                }
+
                                 state.sw.restart();
                                 state.scanning = false;
                             }

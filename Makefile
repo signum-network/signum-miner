@@ -1,5 +1,5 @@
 start:
-	cargo build && target/debug/scavenger
+	cargo build && target/debug/signum-miner
 test:
 	cargo test
 debug:

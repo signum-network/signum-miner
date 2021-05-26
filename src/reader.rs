@@ -89,7 +89,7 @@ impl Reader {
         pb.format("│██░│");
         pb.set_width(Some(80));
         pb.set_units(Units::Bytes);
-        pb.message("Scavenging: ");
+        pb.message("Searching your hashes: ");
         let pb = Arc::new(Mutex::new(pb));
 
         // send start signals (dummy buffer) to gpu threads

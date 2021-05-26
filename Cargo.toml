@@ -1,14 +1,14 @@
 [package]
-name = "scavenger"
+name = "signum-miner"
 version = "1.8.0"
 license = "GPL-3.0"
-authors = ["PoC Consortium <bots@cryptoguru.org>"]
+authors = ["signum-network, forked from PoC Consortium"]
 description = """
-Scavenger - a PoC miner written in Rust
+signum-miner - a PoC miner written in Rust
 """
 build = "build.rs"
-repository = "https://github.com/PoC-Consortium/scavenger"
-documentation = "https://github.com/PoC-Consortium/scavenger"
+repository = "https://github.com/signum-network/signum-miner"
+documentation = "https://github.com/signum-network/signum-miner"
 keywords = ["poc", "miner", "rust","cryptocurrency"]
 readme = "README.md"
 edition = "2018"

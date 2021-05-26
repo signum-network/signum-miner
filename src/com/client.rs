@@ -74,7 +74,7 @@ pub enum ProxyDetails {
 
 impl Client {
     fn ua() -> String {
-        "Scavenger/".to_owned() + crate_version!()
+        "signum-miner/".to_owned() + crate_version!()
     }
 
     fn submit_nonce_headers(
@@ -98,7 +98,7 @@ impl Client {
             );
             headers.insert(
                 "X-Plotfile",
-                ("ScavengerProxy/".to_owned()
+                ("signum-miner-proxy/".to_owned()
                     + &*hostname::get_hostname().unwrap_or_else(|| "".to_owned()))
                     .parse()
                     .unwrap(),

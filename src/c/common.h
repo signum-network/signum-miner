@@ -2,7 +2,7 @@
 
 #pragma once
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__MINGW32__)
 
 #include <stdlib.h>
 #define bswap_32(x) _byteswap_ulong(x)

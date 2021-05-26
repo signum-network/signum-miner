@@ -2,21 +2,21 @@
 cache:
   - c:\cargo\registry
   - c:\cargo\git
-  - c:\projects\scavenger\target
+  - c:\projects\signum-miner\target
 
 init:
   - mkdir c:\cargo
   - mkdir c:\rustup
   - SET PATH=c:\cargo\bin;%PATH%
 
-clone_folder: c:\projects\scavenger
+clone_folder: c:\projects\signum-miner
 
 environment:
   CARGO_HOME: "c:\\cargo"
   RUSTUP_HOME: "c:\\rustup"
-  CARGO_TARGET_DIR: "c:\\projects\\scavenger\\target"
+  CARGO_TARGET_DIR: "c:\\projects\\signum-miner\\target"
   global:
-    PROJECT_NAME: scavenger
+    PROJECT_NAME: signum-miner
     RUST_BACKTRACE: full
   matrix:
     - TARGET: i686-pc-windows-gnu
@@ -53,7 +53,7 @@ test_script:
 #   - cargo build --release
 #   - mkdir staging
 #   - copy target\release\rg.exe staging
-#   - ps: copy target\release\build\scavenger-*\out\_rg.ps1 staging
+#   - ps: copy target\release\build\signum-miner-*\out\_rg.ps1 staging
 #   - cd staging
 #     # release zipfile will look like 'rust-everywhere-v1.2.3-x86_64-pc-windows-msvc'
 #   - 7z a ../%PROJECT_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip *
