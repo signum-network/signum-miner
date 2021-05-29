@@ -54,3 +54,9 @@ winapi = { version = "0.3", features = ["fileapi"] }
 [build-dependencies]
 cc = "1.0"
 cfg-if = "0.1"
+
+[profile.release]
+opt-level = 'z'     # Optimize for size.
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations.
+panic = 'abort'     # Abort on panic
