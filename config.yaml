@@ -19,7 +19,7 @@ url: 'https://pool.burstcoin.ro'      # mainnet pool
 #url: 'http://localhost:6876'         # solo mining testnet
 
 hdd_reader_thread_count: 0            # default 0 (=auto: number of disks)
-hdd_use_direct_io: true               # default true
+hdd_use_direct_io: true               # default true, use false on not PC
 hdd_wakeup_after: 240                 # default 240s
 
 cpu_threads: 0                        # default 0 (=auto: number of logical cpu cores)
