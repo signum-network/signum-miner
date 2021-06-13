@@ -15,7 +15,6 @@ plot_dirs:
 url: 'https://pool.burstcoin.ro'      # mainnet pool
 #url: 'http://nivbox.co.uk:9000'      # testnet pool
 #url: 'http://localhost:8125'         # solo mining
-#url: 'http://localhost:8125'         # solo mining testnet
 #url: 'http://localhost:6876'         # solo mining testnet
 
 hdd_reader_thread_count: 0            # default 0 (=auto: number of disks)
