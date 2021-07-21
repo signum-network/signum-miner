@@ -55,7 +55,12 @@ cfg_if! {
     if #[cfg(unix)] {
         use std::os::unix::fs::OpenOptionsExt;
 
+        // O_DIRECT hint, according to fcntl.h
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         const O_DIRECT: i32 = 0o0_040_000;
+        // For ARM: O_DIRECT 0200000, but currently ignored
+        #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+        const O_DIRECT: i32 = 0o0_200_000;
 
         pub fn open_using_direct_io<P: AsRef<Path>>(path: P) -> io::Result<File> {
             OpenOptions::new()
