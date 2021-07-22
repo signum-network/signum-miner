@@ -58,7 +58,7 @@ cfg_if! {
         // O_DIRECT hint, according to fcntl.h
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         const O_DIRECT: i32 = 0o0_040_000;
-        // For ARM: O_DIRECT 0200000, but currently ignored
+        // For ARM a different value is set O_DIRECT 0200000
         #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
         const O_DIRECT: i32 = 0o0_200_000;
 
