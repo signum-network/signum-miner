@@ -58,7 +58,7 @@ pub struct State {
     sw: Stopwatch,
     scanning: bool,
     processed_reader_tasks: usize,
-    scoop: u32,
+    scoop_array: Vec<u32>,
     first: bool,
     outage: bool,
 }
@@ -69,7 +69,7 @@ impl State {
             generation_signature: "".to_owned(),
             height: 0,
             block: 0,
-            scoop: 0,
+            scoop_array: vec![0],
             account_id_to_best_deadline: HashMap::new(),
             server_target_deadline: u64::MAX,
             base_target: 1,
@@ -95,13 +95,16 @@ impl State {
             poc_hashing::decode_gensig(&mining_info.generation_signature);
         self.generation_signature = mining_info.generation_signature.clone();
 
-        let scoop =
-            poc_hashing::calculate_scoop(mining_info.height, &self.generation_signature_bytes);
+        let mut scoop_array = Vec::new();
+        scoop_array.push(poc_hashing::calculate_scoop(mining_info.height, &self.generation_signature_bytes));
+        for i in 1..mining_info.number_of_scoops_per_block as usize {
+            scoop_array.push(poc_hashing::calculate_scoop(scoop_array[i-1] as u64, &self.generation_signature_bytes));
+        }
         info!(
             "{: <80}",
-            format!("new block: height={}, scoop={}", mining_info.height, scoop)
+            format!("new block: height={}, scoop={:?}", mining_info.height, scoop_array)
         );
-        self.scoop = scoop;
+        self.scoop_array = scoop_array;
 
         self.sw.restart();
         self.processed_reader_tasks = 0;
@@ -488,7 +491,7 @@ impl Miner {
                                         mining_info.height,
                                         state.block,
                                         mining_info.base_target,
-                                        state.scoop,
+                                        &state.scoop_array,
                                         &Arc::new(state.generation_signature_bytes),
                                     );
                                     drop(state);

@@ -159,10 +159,10 @@ impl Plot {
         })
     }
 
-    pub fn prepare(&mut self, scoop: u32) -> io::Result<u64> {
+    pub fn prepare(&mut self, scoop_array: &Vec<u32>) -> io::Result<u64> {
         self.read_offset = 0;
         let nonces = self.meta.nonces;
-        let mut seek_addr = u64::from(scoop) * nonces as u64 * SCOOP_SIZE;
+        let mut seek_addr = u64::from(scoop_array[0]) * nonces as u64 * SCOOP_SIZE;
 
         // reopening file handles
         if !self.use_direct_io {
@@ -178,41 +178,87 @@ impl Plot {
         self.fh.seek(SeekFrom::Start(seek_addr))
     }
 
-    pub fn read(&mut self, bs: &mut Vec<u8>, scoop: u32) -> Result<(usize, u64, bool), io::Error> {
+    pub fn read(&mut self, bs: &mut Vec<u8>, scoop_array: &Vec<u32>) -> Result<(usize, u64, bool), io::Error> {
         let read_offset = self.read_offset;
         let buffer_cap = bs.capacity();
-        let start_nonce = self.meta.start_nonce + self.read_offset / 64;
+        let start_nonce = self.meta.start_nonce + self.read_offset / SCOOP_SIZE;
 
         let (bytes_to_read, finished) =
-            if read_offset as usize + buffer_cap >= (SCOOP_SIZE * self.meta.nonces) as usize {
-                let mut bytes_to_read =
-                    (SCOOP_SIZE * self.meta.nonces) as usize - self.read_offset as usize;
-                if self.use_direct_io {
-                    let r = bytes_to_read % self.sector_size as usize;
-                    if r != 0 {
-                        bytes_to_read -= r;
-                    }
+        if read_offset + buffer_cap as u64 >= (SCOOP_SIZE * self.meta.nonces) {
+            let mut bytes_to_read =
+                (SCOOP_SIZE * self.meta.nonces - self.read_offset) as usize;
+            if self.use_direct_io {
+                let r = bytes_to_read % self.sector_size as usize;
+                if r != 0 {
+                    bytes_to_read -= r;
                 }
+            }
 
-                (bytes_to_read, true)
-            } else {
-                (buffer_cap as usize, false)
-            };
+            (bytes_to_read, true)
+        } else {
+            (buffer_cap as usize, false)
+        };
+
+        // if we have more than one scoop, we will read some nonces and then skip
+        let nonces_to_switch_scoop = SCOOPS_IN_NONCE as usize / scoop_array.len();
+        let mut bytes_to_switch_scoop = NONCE_SIZE as usize / scoop_array.len();
+
+        let scoop_alignmet_offset = SCOOPS_IN_NONCE as usize
+            - ((start_nonce + scoop_array[0] as u64) % SCOOPS_IN_NONCE) as usize;
 
         let offset = self.read_offset;
         let nonces = self.meta.nonces;
-        let seek_addr =
-            SeekFrom::Start(offset as u64 + u64::from(scoop) * nonces as u64 * SCOOP_SIZE);
-        if !self.dummy {
-            self.fh.seek(seek_addr)?;
-            self.fh.read_exact(&mut bs[0..bytes_to_read])?;
-            // interrupt avoider (not implemented)
-            // let read_chunk_size_in_nonces = 65536;
-            // for i in (0..bytes_to_read).step_by(read_chunk_size_in_nonces) {
-            //     self.fh.read_exact(
-            //         &mut bs[i..(i + min(read_chunk_size_in_nonces, bytes_to_read - i))],
-            //     )?;
-            // }
+    
+        for scoop_number_position in 0..scoop_array.len() {
+            let scoop = scoop_array[scoop_number_position];
+
+            let mut start_offset_nonces = (scoop_alignmet_offset + nonces_to_switch_scoop * scoop_number_position)
+                % SCOOPS_IN_NONCE as usize;
+            if scoop_array.len() == 1 {
+              // single scoop, so we can speed things up
+              start_offset_nonces = 0;
+              bytes_to_switch_scoop = bytes_to_read;
+            }
+            else if start_offset_nonces > SCOOPS_IN_NONCE as usize - nonces_to_switch_scoop {
+                // this scoop number has a section in the beginning of the file, so we read it first
+                let nonces_to_read_on_start = start_offset_nonces - (SCOOPS_IN_NONCE as usize - nonces_to_switch_scoop);
+                let bytes_to_read_on_start = nonces_to_read_on_start * SCOOP_SIZE as usize;
+          
+                let seek_addr_start =
+                    SeekFrom::Start(self.read_offset + scoop as u64 * nonces * SCOOP_SIZE);
+                if !self.dummy {
+                    self.fh.seek(seek_addr_start)?;
+                    self.fh.read_exact(&mut bs[0..bytes_to_read_on_start])?;
+                }
+            }
+
+
+            let mut start_offset_bytes = start_offset_nonces * SCOOP_SIZE as usize;
+            let mut file_position_bytes = offset + start_offset_bytes as u64
+                + scoop as u64 * nonces * SCOOP_SIZE;
+        
+            while start_offset_bytes < bytes_to_read {
+                let seek_addr = SeekFrom::Start(file_position_bytes);
+
+                if !self.dummy {
+                    self.fh.seek(seek_addr)?;
+                    let bytes_to_read_now = min(bytes_to_switch_scoop, buffer_cap - start_offset_bytes);
+                    self.fh.read_exact(&mut bs[start_offset_bytes..start_offset_bytes + bytes_to_read_now])?;
+                    // interrupt avoider (not implemented)
+                    // let read_chunk_size_in_nonces = 65536;
+                    // for i in (0..bytes_to_read).step_by(read_chunk_size_in_nonces) {
+                    //     self.fh.read_exact(
+                    //         &mut bs[i..(i + min(read_chunk_size_in_nonces, bytes_to_read - i))],
+                    //     )?;
+                    // }
+                }
+                if scoop_array.len() == 1 {
+                    // we are done already
+                    break;
+                }
+                start_offset_bytes += NONCE_SIZE as usize;
+                file_position_bytes += NONCE_SIZE;
+            }
         }
         self.read_offset += bytes_to_read as u64;
 

@@ -79,7 +79,7 @@ impl Reader {
         height: u64,
         block: u64,
         base_target: u64,
-        scoop: u32,
+        scoop_array: &Vec<u32>,
         gensig: &Arc<[u8; 32]>,
     ) {
         for interupt in &self.interupts {
@@ -125,7 +125,7 @@ impl Reader {
                         height,
                         block,
                         base_target,
-                        scoop,
+                        scoop_array.clone(),
                         gensig.clone(),
                         self.show_drive_stats,
                     )
@@ -137,7 +137,7 @@ impl Reader {
                         height,
                         block,
                         base_target,
-                        scoop,
+                        scoop_array.clone(),
                         gensig.clone(),
                         self.show_drive_stats,
                     )
@@ -173,7 +173,7 @@ impl Reader {
         height: u64,
         block: u64,
         base_target: u64,
-        scoop: u32,
+        scoop_array: Vec<u32>,
         gensig: Arc<[u8; 32]>,
         show_drive_stats: bool,
     ) -> (Sender<()>, impl FnOnce()) {
@@ -191,7 +191,7 @@ impl Reader {
             let plot_count = plots.len();
             'outer: for (i_p, p) in plots.iter().enumerate() {
                 let mut p = p.lock().unwrap();
-                if let Err(e) = p.prepare(scoop) {
+                if let Err(e) = p.prepare(&scoop_array) {
                     error!(
                         "reader: error preparing {} for reading: {} -> skip one round",
                         p.meta.name, e
@@ -205,7 +205,7 @@ impl Reader {
                     }
                     let mut_bs = buffer.get_buffer_for_writing();
                     let mut bs = mut_bs.lock().unwrap();
-                    let (bytes_read, start_nonce, next_plot) = match p.read(&mut bs, scoop) {
+                    let (bytes_read, start_nonce, next_plot) = match p.read(&mut bs, &scoop_array) {
                         Ok(x) => x,
                         Err(e) => {
                             error!(

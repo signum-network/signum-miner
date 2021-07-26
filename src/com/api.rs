@@ -38,6 +38,12 @@ pub struct MiningInfoResponse {
     pub height: u64,
 
     #[serde(
+        default = "default_number_of_scoops_per_block",
+        deserialize_with = "from_str_or_int"
+    )]
+    pub number_of_scoops_per_block: u64,
+
+    #[serde(
         default = "default_target_deadline",
         deserialize_with = "from_str_or_int"
     )]
@@ -46,6 +52,10 @@ pub struct MiningInfoResponse {
 
 fn default_target_deadline() -> u64 {
     std::u64::MAX
+}
+
+fn default_number_of_scoops_per_block() -> u64 {
+    1
 }
 
 #[derive(Debug, Deserialize)]
