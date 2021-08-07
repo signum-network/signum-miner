@@ -5,8 +5,8 @@
 #include "mshabal_256_avx2.h"
 #include "sph_shabal.h"
 
-mshabal256_context global_256;
-mshabal256_context_fast global_256_fast;
+static mshabal256_context global_256;
+static mshabal256_context_fast global_256_fast;
 
 void init_shabal_avx2() {
     mshabal_init_avx2(&global_256, 256);

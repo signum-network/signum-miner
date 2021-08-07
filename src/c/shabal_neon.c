@@ -5,8 +5,8 @@
 #include "mshabal_128_neon.h"
 #include "sph_shabal.h"
 
-mshabal128_context global_128;
-mshabal128_context_fast global_128_fast;
+static mshabal128_context global_128;
+static mshabal128_context_fast global_128_fast;
 
 void init_shabal_neon() {
     mshabal_init_neon(&global_128, 256);
