@@ -141,7 +141,7 @@ fn main() {
     ocl::gpu_info(&cfg_loaded);
 
     let rt = Builder::new().core_threads(1).build().unwrap();
-    let m = Miner::new(cfg_loaded, rt.executor());
+    let m = Miner::new(cfg_loaded, rt.executor()).unwrap();
     m.run();
     rt.shutdown_on_idle().wait().unwrap();
 }

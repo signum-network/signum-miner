@@ -22,6 +22,7 @@ use futures::sync::mpsc;
 use ocl_core::Mem;
 use std::cmp::{max, min};
 use std::collections::HashMap;
+use std::error::Error;
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::process;
@@ -136,15 +137,16 @@ pub struct CpuBuffer {
 }
 
 impl CpuBuffer {
-    pub fn new(buffer_size: usize) -> Self {
-        let pointer = aligned_alloc::aligned_alloc(buffer_size, page_size::get());
+    pub fn new(buffer_size: usize) -> Result<Self, Box<dyn Error>> {
+        let layout = std::alloc::Layout::from_size_align(buffer_size, page_size::get())?;
+        let pointer = unsafe { std::alloc::alloc(layout) };
         let data: Vec<u8>;
         unsafe {
             data = Vec::from_raw_parts(pointer as *mut u8, buffer_size, buffer_size);
         }
-        CpuBuffer {
+        Ok(CpuBuffer {
             data: Arc::new(Mutex::new(data)),
-        }
+        })
     }
 }
 
@@ -228,7 +230,7 @@ fn scan_plots(
 }
 
 impl Miner {
-    pub fn new(cfg: Cfg, executor: TaskExecutor) -> Miner {
+    pub fn new(cfg: Cfg, executor: TaskExecutor) -> Result<Miner, Box<dyn Error>> {
         let (drive_id_to_plots, total_size) =
             scan_plots(&cfg.plot_dirs, cfg.hdd_use_direct_io, cfg.benchmark_cpu());
 
@@ -353,7 +355,7 @@ impl Miner {
         }
 
         for _ in 0..cpu_buffer_count {
-            let cpu_buffer = CpuBuffer::new(buffer_size_cpu);
+            let cpu_buffer = CpuBuffer::new(buffer_size_cpu)?;
             tx_empty_buffers
                 .send(Box::new(cpu_buffer) as Box<dyn Buffer + Send>)
                 .unwrap();
@@ -419,7 +421,7 @@ impl Miner {
         #[cfg(not(feature = "opencl"))]
         let tx_read_replies_gpu = None;
 
-        Miner {
+        Ok(Miner {
             reader_task_count: drive_id_to_plots.len(),
             reader: Reader::new(
                 drive_id_to_plots,
@@ -452,7 +454,7 @@ impl Miner {
             executor,
             wakeup_after: cfg.hdd_wakeup_after * 1000, // ms -> s
             submit_only_best : cfg.submit_only_best,
-        }
+        })
     }
 
     pub fn run(self) {
