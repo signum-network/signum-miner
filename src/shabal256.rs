@@ -1,4 +1,4 @@
-use std::slice::from_raw_parts;
+use std::convert::TryInto;
 
 const A_INIT: [u32; 12] = [
     0x52F84552, 0xE54B7999, 0x2D8EE3EC, 0xB9645191, 0xE0078B86, 0xBB7C44C9, 0xD2B5C1CA, 0xB0D2EB8C,
@@ -21,9 +21,16 @@ pub fn shabal256_deadline_fast(data: &[u8], gensig: &[u8; 32]) -> u64 {
     let mut c = C_INIT;
     let mut w_high = 0u32;
     let mut w_low = 1u32;
-    let data_ptr = data.as_ptr() as *const u32;
-    let data = unsafe { from_raw_parts(data_ptr, data.len() / 4) };
-    let gensig = unsafe { std::mem::transmute::<&[u8; 32], &[u32; 8]>(&gensig) };
+
+    // Convert data to &[u32]
+    let data: Vec<u32> = data
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
+
+    // Convert gensig to &[u32; 8]
+    let gensig: &[u32; 8] = unsafe { &*(gensig.as_ptr() as *const [u32; 8]) };
+
     let mut term = [0u32; 8];
     term[0] = 0x80;
 
@@ -54,8 +61,12 @@ pub fn shabal256_hash_fast(data: &[u8], term: &[u32; 16]) -> [u8; 32] {
     let mut w_low = 1u32;
     let mut num = data.len() >> 6;
     let mut ptr = 0;
-    let data_ptr = data.as_ptr() as *const u32;
-    let data = unsafe { from_raw_parts(data_ptr, data.len() / 4) };
+
+    // Convert data to &[u32]
+    let data: Vec<u32> = data
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+        .collect();
 
     while num > 0 {
         input_block_add(&mut b, &data[ptr..]);
