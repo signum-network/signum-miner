@@ -137,11 +137,8 @@ pub struct CpuBuffer {
 
 impl CpuBuffer {
     pub fn new(buffer_size: usize) -> Self {
-        let pointer = aligned_alloc::aligned_alloc(buffer_size, page_size::get());
-        let data: Vec<u8>;
-        unsafe {
-            data = Vec::from_raw_parts(pointer as *mut u8, buffer_size, buffer_size);
-        }
+        let data = vec![0u8; buffer_size]; // Create a vector with the specified size, initialized to zero
+
         CpuBuffer {
             data: Arc::new(Mutex::new(data)),
         }
