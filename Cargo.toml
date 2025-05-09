@@ -44,7 +44,7 @@ tokio = "0.1"
 url = "1.7"
 page_size = "0.6.0"
 reqwest = { version = "0.9.9", default-features = false, features = ["rustls-tls"] }
-bytes = "0.4.11"
+bytes = "1.10.1"
 url_serde = "0.2"
 
 [target.'cfg(windows)'.dependencies]
