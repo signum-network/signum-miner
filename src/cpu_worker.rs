@@ -229,9 +229,6 @@ mod tests {
     use hex;
     use std::u64;
 
-    #[cfg(any(feature = "simd", feature = "neon"))]
-    use libc::c_void;
-
     #[test]
     fn test_deadline_hashing() {
         let gensig =

@@ -13,7 +13,6 @@ use std::{
 
 use futures_core::Stream;
 use futures_core::Future;
-use futures_util::stream::StreamExt;
 use pin_project::pin_project;
 use tokio::time::{self, Duration, Instant, Sleep};
 
