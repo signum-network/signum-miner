@@ -53,7 +53,7 @@ tokio = { version = "1.37", features = ["full","test-util"] }
 tokio-stream = "0.1"
 url = { version = "2", features = ["serde"] }
 page_size = "0.6.0"
-reqwest = { version = "0.12.15", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.13.1", default-features = false, features = ["rustls-tls"] }
 bytes = "1.10.1"
 
 
