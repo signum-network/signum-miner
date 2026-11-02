@@ -64,6 +64,10 @@ pub struct State {
     scoop: u32,
     first: bool,
     outage: bool,
+    /// The last generation signature refused for not being 32 bytes of hex, so
+    /// a pool that keeps sending the same bad one is reported once, not every
+    /// tick.
+    bad_gensig: String,
 }
 
 impl State {
@@ -82,10 +86,36 @@ impl State {
             scanning: false,
             first: true,
             outage: false,
+            bad_gensig: "".to_owned(),
         }
     }
 
-    fn update_mining_info(&mut self, mining_info: &MiningInfo) {
+    /// Takes the pool's mining info and starts a round for it.
+    ///
+    /// Returns `false` when the generation signature in it cannot be decoded, in
+    /// which case nothing was changed: there is no scoop to scan without a
+    /// signature, so the miner stays on the round it had.
+    fn update_mining_info(&mut self, mining_info: &MiningInfo) -> bool {
+        // The signature is a string from the pool, so it can be anything; it
+        // used to be decoded with `unwrap()`. Decode it first, before touching
+        // the round state.
+        let Some(generation_signature_bytes) =
+            poc_hashing::decode_gensig(&mining_info.generation_signature)
+        else {
+            if self.bad_gensig != mining_info.generation_signature {
+                error!(
+                    "{: <80}",
+                    format!(
+                        "pool sent a generationSignature that is not 32 bytes of hex: {:?} \
+                         -> ignoring this block",
+                        mining_info.generation_signature
+                    )
+                );
+                self.bad_gensig = mining_info.generation_signature.clone();
+            }
+            return false;
+        };
+
         for best_deadlines in self.account_id_to_best_deadline.values_mut() {
             *best_deadlines = u64::MAX;
         }
@@ -94,8 +124,7 @@ impl State {
         self.base_target = mining_info.base_target;
         self.server_target_deadline = mining_info.target_deadline;
 
-        self.generation_signature_bytes =
-            poc_hashing::decode_gensig(&mining_info.generation_signature);
+        self.generation_signature_bytes = generation_signature_bytes;
         self.generation_signature = mining_info.generation_signature.clone();
 
         let scoop =
@@ -109,6 +138,7 @@ impl State {
         self.sw.restart();
         self.processed_reader_tasks = 0;
         self.scanning = true;
+        true
     }
 }
 
@@ -504,14 +534,17 @@ impl Miner {
                                     state.outage = false;
                                 }
                                 if mining_info.generation_signature != state.generation_signature {
-                                    state.update_mining_info(&mining_info);
-                                    reader.lock().unwrap().start_reading(
-                                        mining_info.height,
-                                        state.block,
-                                        mining_info.base_target,
-                                        state.scoop,
-                                        &Arc::new(state.generation_signature_bytes),
-                                    );
+                                    // A refused signature must not start a
+                                    // round: there would be nothing to scan for.
+                                    if state.update_mining_info(&mining_info) {
+                                        reader.lock().unwrap().start_reading(
+                                            mining_info.height,
+                                            state.block,
+                                            mining_info.base_target,
+                                            state.scoop,
+                                            &Arc::new(state.generation_signature_bytes),
+                                        );
+                                    }
                                     drop(state);
                                 } else if !state.scanning
                                     && wakeup_after != 0
