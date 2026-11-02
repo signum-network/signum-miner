@@ -5,8 +5,6 @@ use crate::future::interval::Interval;
 #[cfg(feature = "opencl")]
 use crate::gpu_worker::create_gpu_worker_task;
 #[cfg(feature = "opencl")]
-use crate::gpu_worker_async::create_gpu_worker_task_async;
-#[cfg(feature = "opencl")]
 use crate::ocl::GpuBuffer;
 #[cfg(feature = "opencl")]
 use crate::ocl::GpuContext;
@@ -140,6 +138,17 @@ pub struct CpuBuffer {
 
 impl CpuBuffer {
     pub fn new(buffer_size: usize) -> Self {
+        // Zero-length buffers are only used as `gpu_signal` carriers: no worker ever
+        // reads from or writes to them. Allocating one through the page-aligned path
+        // below would hand a page-aligned block to a `Vec<u8>`, which frees with
+        // align == 1 - a layout mismatch that corrupts the Windows heap as soon as
+        // such a buffer is dropped (which for signal dummies happens every round).
+        if buffer_size == 0 {
+            return CpuBuffer {
+                data: Arc::new(Mutex::new(Vec::new())),
+            };
+        }
+
         let alignment = page_size::get();
         let layout = Layout::from_size_align(buffer_size, alignment)
             .expect("Invalid layout");
@@ -154,6 +163,11 @@ impl CpuBuffer {
         // SAFETY:
         // - raw_ptr must be non-null and valid for `buffer_size` bytes
         // - memory must be initialized (we used alloc_zeroed)
+        //
+        // NOTE: the resulting `Vec` does not remember `alignment`, so dropping it
+        // calls `dealloc` with align == 1 while the block was allocated with
+        // `alignment`. Keep these buffers alive for the whole process (the miner
+        // does) instead of dropping them mid-run.
         let data = unsafe {
             Vec::from_raw_parts(raw_ptr, buffer_size, buffer_size)
         };
@@ -405,30 +419,25 @@ impl Miner {
         });
 
         #[cfg(feature = "opencl")]
+        if cfg.gpu_async {
+            warn!(
+                "gpu_async is not supported by this build (the async GPU worker was removed \
+                 with the futures 0.1 -> 0.3 migration); using the synchronous GPU worker \
+                 instead. Prefer gpu_mem_mapping = true."
+            );
+        }
+
+        #[cfg(feature = "opencl")]
         for i in 0..gpu_threads {
-            if cfg.gpu_async {
-                thread::spawn({
-                    create_gpu_worker_task_async(
-                        cfg.benchmark_io(),
-                        rx_read_replies_gpu[i].clone(),
-                        tx_empty_buffers.clone(),
-                        tx_nonce_data.clone(),
-                        gpu_contexts[i].clone(),
-                        drive_id_to_plots.len(),
-                    )
-                });
-            } else {
-                #[cfg(feature = "opencl")]
-                thread::spawn({
-                    create_gpu_worker_task(
-                        cfg.benchmark_io(),
-                        rx_read_replies_gpu[i].clone(),
-                        tx_empty_buffers.clone(),
-                        tx_nonce_data.clone(),
-                        gpu_contexts[i].clone(),
-                    )
-                });
-            }
+            thread::spawn({
+                create_gpu_worker_task(
+                    cfg.benchmark_io(),
+                    rx_read_replies_gpu[i].clone(),
+                    tx_empty_buffers.clone(),
+                    tx_nonce_data.clone(),
+                    gpu_contexts[i].clone(),
+                )
+            });
         }
 
         #[cfg(feature = "opencl")]

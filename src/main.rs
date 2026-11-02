@@ -24,8 +24,6 @@ mod utils;
 #[cfg(feature = "opencl")]
 mod gpu_worker;
 #[cfg(feature = "opencl")]
-mod gpu_worker_async;
-#[cfg(feature = "opencl")]
 mod ocl;
 
 use crate::config::load_cfg;
@@ -156,7 +154,7 @@ async fn main() {
     info!("GPU extensions: OpenCL");
 
     #[cfg(feature = "opencl")]
-    if matches.contains_id("opencl") {
+    if matches.get_flag("opencl") {
         ocl::platform_info();
         process::exit(0);
     }

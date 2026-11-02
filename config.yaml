@@ -18,13 +18,17 @@ cpu_worker_task_count: 4              # default 4 (0=GPU only)
 cpu_nonces_per_cache: 65536           # default 65536
 cpu_thread_pinning: false             # default false
 
-gpu_threads: 0                        # default 0 (=GPU off)
-gpu_platform: 0                       # default 0
-gpu_device: 0                         # default 0
-gpu_worker_task_count: 0              # default 0 (=CPU only)
-gpu_nonces_per_cache: 262144          # default 262144
-gpu_mem_mapping: false                # default false
-gpu_async: false                      # default false
+gpu_threads: 0                        # default 0 (=GPU off); number of GPU worker threads/contexts
+gpu_platform: 0                       # default 0 (see `signum-miner --opencl`)
+gpu_device: 0                         # default 0 (see `signum-miner --opencl`)
+gpu_worker_task_count: 0              # default 0 (=CPU only); extra in-flight buffers
+                                      # buffers in flight = gpu_worker_task_count + gpu_threads,
+                                      # keep it >= number of drives
+gpu_nonces_per_cache: 262144          # default 262144 (must be a multiple of 64)
+gpu_mem_mapping: false                # default false; recommended: reader writes straight into
+                                      # GPU-visible pinned memory -> no extra 16 MiB copy/buffer
+gpu_async: false                      # default false; NOT supported by this build (async GPU
+                                      # worker removed with the futures 0.1 -> 0.3 migration)
 
 target_deadline: 31536000             # default 31536000 (1 year)
 #account_id_to_target_deadline:        # target dls for multi-id (optional)

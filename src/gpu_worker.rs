@@ -5,13 +5,13 @@ use crate::reader::ReadReply;
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
 use std::u64;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender as TokioSender;
 
 pub fn create_gpu_worker_task(
     benchmark: bool,
     rx_read_replies: Receiver<ReadReply>,
     tx_empty_buffers: Sender<Box<dyn Buffer + Send>>,
-    tx_nonce_data: mpsc::UnboundedSender<NonceData>,
+    tx_nonce_data: TokioSender<NonceData>,
     context_mu: Arc<GpuContext>,
 ) -> impl FnOnce() + Send + 'static {
     move || {
@@ -22,7 +22,7 @@ pub fn create_gpu_worker_task(
                 // forward 'drive finished signal'
                 if read_reply.info.finished {
                     let deadline = u64::MAX;
-                    let _ = tx_nonce_data.send(NonceData {
+                    let _ = tx_nonce_data.blocking_send(NonceData {
                         height: read_reply.info.height,
                         block: read_reply.info.block,
                         base_target: read_reply.info.base_target,
@@ -54,7 +54,7 @@ pub fn create_gpu_worker_task(
             let deadline = result.0;
             let offset = result.1;
 
-            let _ = tx_nonce_data.send(NonceData {
+            let _ = tx_nonce_data.blocking_send(NonceData {
                 height: read_reply.info.height,
                 block: read_reply.info.block,
                 base_target: read_reply.info.base_target,
