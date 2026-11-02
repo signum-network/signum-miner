@@ -1,6 +1,7 @@
 use crate::miner::{Buffer, NonceData};
 use crate::poc_hashing::find_best_deadline_rust;
 use crate::reader::ReadReply;
+use crate::utils::lock;
 use crossbeam_channel::{Receiver, Sender};
 use std::u64;
 use tokio::sync::mpsc::Sender as TokioSender;
@@ -120,7 +121,7 @@ pub fn hash(
         let mut offset: u64 = 0;
 
         let bs = buffer.get_buffer_for_writing();
-        let bs = bs.lock().unwrap();
+        let bs = lock(&bs);
 
         #[cfg(feature = "simd_avx512f")]
         unsafe {

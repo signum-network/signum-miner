@@ -5,6 +5,7 @@ use ocl_core as core;
 
 use crate::config::Cfg;
 use crate::miner::Buffer;
+use crate::utils::lock;
 use std::cmp::{max, min};
 use std::ffi::CString;
 use std::process;
@@ -461,7 +462,7 @@ fn upload_gensig(gpu_context: &Arc<GpuContext>, gensig: [u8; 32], blocking: bool
 
 fn transfer_buffer_to_gpu(gpu_context: &Arc<GpuContext>, buffer: &GpuBuffer, blocking: bool) {
     let data = buffer.data.clone();
-    let data2 = (*data).lock().unwrap();
+    let data2 = lock(&data);
     if gpu_context.mapping {
         let temp2 = buffer.buffer_ptr_host.as_ref().unwrap();
         core::enqueue_unmap_mem_object(

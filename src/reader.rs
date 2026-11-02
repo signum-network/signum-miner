@@ -2,7 +2,7 @@ use crate::miner::Buffer;
 #[cfg(feature = "opencl")]
 use crate::miner::CpuBuffer;
 use crate::plot::{Meta, Plot};
-use crate::utils::new_thread_pool;
+use crate::utils::{lock, new_thread_pool};
 use crossbeam_channel;
 use crossbeam_channel::{Receiver, Sender};
 use pbr::{ProgressBar, Units};
@@ -153,7 +153,7 @@ impl Reader {
         for plots in self.drive_id_to_plots.values() {
             let plots = plots.clone();
             self.pool.spawn(move || {
-                let mut p = plots[0].lock().unwrap();
+                let mut p = lock(&plots[0]);
 
                 if let Err(e) = p.seek_random() {
                     error!(
@@ -190,7 +190,7 @@ impl Reader {
             let mut nonces_processed = 0u64;
             let plot_count = plots.len();
             'outer: for (i_p, p) in plots.iter().enumerate() {
-                let mut p = p.lock().unwrap();
+                let mut p = lock(p);
                 if let Err(e) = p.prepare(scoop) {
                     error!(
                         "reader: error preparing {} for reading: {} -> skip one round",
@@ -204,7 +204,7 @@ impl Reader {
                         sw.restart();
                     }
                     let mut_bs = buffer.get_buffer_for_writing();
-                    let mut bs = mut_bs.lock().unwrap();
+                    let mut bs = lock(&mut_bs);
                     let (bytes_read, start_nonce, next_plot) = match p.read(&mut bs, scoop) {
                         Ok(x) => x,
                         Err(e) => {
@@ -286,7 +286,7 @@ impl Reader {
 
                     match &pb {
                         Some(pb) => {
-                            let mut pb = pb.lock().unwrap();
+                            let mut pb = lock(pb);
                             pb.add(bytes_read as u64);
                         }
                         None => (),
@@ -346,7 +346,7 @@ pub fn check_overlap(drive_id_to_plots: &HashMap<String, Arc<Vec<Mutex<Plot>>>>)
         .values()
         .map(|a| a.iter())
         .flatten()
-        .map(|plot| plot.lock().unwrap().meta.clone())
+        .map(|plot| lock(plot).meta.clone())
         .collect();
     plots
         .par_iter()

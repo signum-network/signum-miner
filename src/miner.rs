@@ -14,7 +14,7 @@ use crate::plot::{Plot, SCOOP_SIZE};
 use crate::poc_hashing;
 use crate::reader::Reader;
 use crate::requests::RequestHandler;
-use crate::utils::{get_device_id, new_thread_pool};
+use crate::utils::{get_device_id, lock, new_thread_pool};
 use crossbeam_channel;
 use filetime::FileTime;
 use futures_util::{stream::StreamExt};
@@ -497,7 +497,7 @@ impl Miner {
                         let mining_info = request_handler.get_mining_info();
                         match mining_info.await {
                             Ok(mining_info) => {
-                                let mut state = state.lock().unwrap();
+                                let mut state = lock(&state);
                                 state.first = false;
                                 if state.outage {
                                     error!("{: <80}", "outage resolved.");
@@ -505,7 +505,7 @@ impl Miner {
                                 }
                                 if mining_info.generation_signature != state.generation_signature {
                                     state.update_mining_info(&mining_info);
-                                    reader.lock().unwrap().start_reading(
+                                    lock(&reader).start_reading(
                                         mining_info.height,
                                         state.block,
                                         mining_info.base_target,
@@ -518,12 +518,12 @@ impl Miner {
                                     && state.sw.elapsed_ms() > wakeup_after
                                 {
                                     info!("HDD, wakeup!");
-                                    reader.lock().unwrap().wakeup();
+                                    lock(&reader).wakeup();
                                     state.sw.restart();
                                 }
                             }
                             _ => {
-                                let mut state = state.lock().unwrap();
+                                let mut state = lock(&state);
                                 if state.first {
                                     error!(
                                         "{: <80}",
@@ -565,7 +565,7 @@ impl Miner {
         self.executor.clone().spawn(
             ReceiverStream::new(self.rx_nonce_data)
                 .for_each(move |nonce_data| {
-                    let mut state = state.lock().unwrap();
+                    let mut state = lock(&state);
 
                     let deadline = nonce_data.deadline / nonce_data.base_target;
                     if state.height == nonce_data.height {

@@ -1,5 +1,20 @@
 use core_affinity;
 use rayon;
+use std::sync::{Mutex, MutexGuard};
+
+/// Lock a mutex even if a thread panicked while holding it.
+///
+/// The mutexes this replaces guard plain data: a height, a buffer, a progress
+/// bar. A poisoned one must not stop the miner, but `lock().unwrap()` turns
+/// exactly that into a second panic - and then a third, and so on, because the
+/// hot locks are shared by every reader task, by the block poll and by the
+/// submission loop. One panic inside a lock is therefore a dead miner until
+/// someone restarts it, and with `panic = 'abort'` there is nothing to restart
+/// it with. The data may be a little stale after such a panic, which is a much
+/// better outcome than silence.
+pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 pub fn new_thread_pool(num_threads: usize, thread_pinning: bool) -> rayon::ThreadPool {
     let core_ids = if thread_pinning {
@@ -171,6 +186,23 @@ cfg_if! {
 mod test {
     use super::*;
     //use std::env;
+
+    /// A panic inside a lock must cost one round, not the miner: every later
+    /// user has to get the data back instead of a panic of its own.
+    #[test]
+    fn lock_survives_a_poisoned_mutex() {
+        let mutex = std::sync::Arc::new(std::sync::Mutex::new(41u64));
+        let in_thread = mutex.clone();
+        let _ = std::thread::spawn(move || {
+            let mut guard = in_thread.lock().unwrap();
+            *guard += 1;
+            panic!("panic while holding the lock");
+        })
+        .join();
+
+        assert!(mutex.lock().is_err(), "the mutex should be poisoned now");
+        assert_eq!(*lock(&mutex), 42, "the data written before the panic is kept");
+    }
 
     #[test]
     fn test_get_device_id() {
