@@ -68,4 +68,11 @@ cfg-if = "1.0"
 opt-level = 'z'     # Optimize for size.
 lto = true          # Enable Link Time Optimization
 codegen-units = 1   # Reduce number of codegen units to increase optimizations.
-panic = 'abort'     # Abort on panic
+panic = 'unwind'
+# Unwind, not abort: the OpenCL paths panic on failure (ocl.rs unwraps every
+# call), and `panic = 'abort'` kills the whole miner over one bad call - every
+# round in flight, every buffer, all of it. It also silently deletes the
+# recovery code: with the abort strategy `catch_unwind` can never return `Err`,
+# so the compiler treats the `Err` arms that clean up and log as unreachable and
+# removes them. Unwinding costs a little size and lets one worker die instead of
+# the farm.

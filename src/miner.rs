@@ -14,10 +14,10 @@ use crate::plot::{Plot, SCOOP_SIZE};
 use crate::poc_hashing;
 use crate::reader::Reader;
 use crate::requests::RequestHandler;
-use crate::utils::{get_device_id, new_thread_pool};
+use crate::utils::{catch_panic, get_device_id, new_thread_pool};
 use crossbeam_channel;
 use filetime::FileTime;
-use futures_util::{stream::StreamExt};
+use futures_util::{stream::StreamExt, FutureExt};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 #[cfg(feature = "opencl")]
@@ -25,6 +25,7 @@ use ocl_core::Mem;
 use std::cmp::{max, min};
 use std::collections::HashMap;
 use std::fs::read_dir;
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
@@ -494,9 +495,20 @@ impl Miner {
                     let reader = reader.clone();
                     let request_handler = request_handler.clone();
                     async move {
-                        let mining_info = request_handler.get_mining_info();
-                        match mining_info.await {
-                            Ok(mining_info) => {
+                        // The pool side can go wrong in more ways than a
+                        // returned error: building the request parses headers,
+                        // and the answer is parsed too. A panic in there must
+                        // not end the only task that starts rounds.
+                        let mining_info = AssertUnwindSafe(request_handler.get_mining_info())
+                            .catch_unwind()
+                            .await;
+                        // Starting a round is this task's one job and no other
+                        // task does it, so the setup runs behind `catch_panic`
+                        // as well: it touches the reader tasks and the thread
+                        // pool, and a panic there has to cost one round, not
+                        // every round from now on.
+                        catch_panic("miner: starting a round", || match mining_info {
+                            Ok(Ok(mining_info)) => {
                                 let mut state = state.lock().unwrap();
                                 state.first = false;
                                 if state.outage {
@@ -522,7 +534,7 @@ impl Miner {
                                     state.sw.restart();
                                 }
                             }
-                            _ => {
+                            Ok(Err(_)) => {
                                 let mut state = state.lock().unwrap();
                                 if state.first {
                                     error!(
@@ -539,7 +551,16 @@ impl Miner {
                                     state.outage = true;
                                 }
                             }
-                        }
+                            Err(_) => {
+                                let mut state = state.lock().unwrap();
+                                error!(
+                                    "{: <80}",
+                                    "getting mining info panicked -> carrying on"
+                                );
+                                state.first = false;
+                                state.outage = true;
+                            }
+                        });
                     }
                 })
                 .await; 
@@ -565,6 +586,7 @@ impl Miner {
         self.executor.clone().spawn(
             ReceiverStream::new(self.rx_nonce_data)
                 .for_each(move |nonce_data| {
+                    catch_panic("miner: handling a share", || {
                     let mut state = state.lock().unwrap();
 
                     let deadline = nonce_data.deadline / nonce_data.base_target;
@@ -636,6 +658,7 @@ impl Miner {
                             }
                         }
                     }
+                    });
                     futures_util::future::ready(())
                 }),
         );

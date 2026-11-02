@@ -1,5 +1,7 @@
 use core_affinity;
 use rayon;
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Mutex, MutexGuard};
 
 pub fn new_thread_pool(num_threads: usize, thread_pinning: bool) -> rayon::ThreadPool {
     let core_ids = if thread_pinning {
@@ -21,6 +23,22 @@ pub fn new_thread_pool(num_threads: usize, thread_pinning: bool) -> rayon::Threa
         })
         .build()
         .unwrap()
+}
+
+/// Run `f`, reporting a panic instead of letting it end the caller.
+///
+/// A panic used to be fatal to the process (`panic = 'abort'`), so nothing had
+/// to survive one. Now that panics unwind, a panic inside a long-lived task -
+/// starting rounds, submitting shares, hashing a window - would end that task
+/// while the process keeps running, and if it is the task that starts rounds or
+/// sends shares, nothing starts another round or sends another share: silence,
+/// with no crash to notice. The tasks that must outlive any single bad round run
+/// their work through here. The panic message itself is still printed by the
+/// default hook; this adds the line that says the miner carried on.
+pub fn catch_panic<F: FnOnce()>(what: &str, f: F) {
+    if panic::catch_unwind(AssertUnwindSafe(f)).is_err() {
+        error!("{} panicked -> carrying on", what);
+    }
 }
 
 cfg_if! {
@@ -187,5 +205,12 @@ mod test {
         // let test_string = cwd.into_os_string().into_string().unwrap();
         // info!("{}", test_string);
         // assert_ne!(0, get_sector_size(&test_string));
+    }
+
+    /// The whole point of `catch_panic`: the caller lives on. If this ever
+    /// stops catching, this test fails instead of the miner going quiet.
+    #[test]
+    fn catch_panic_returns_after_a_panic() {
+        catch_panic("test: expected panic", || panic!("expected"));
     }
 }
