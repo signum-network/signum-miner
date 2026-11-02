@@ -5,10 +5,18 @@ use std::u64;
 
 const SCOOP_SIZE: usize = 64;
 
-pub fn decode_gensig(gensig: &str) -> [u8; 32] {
-    let mut gensig_bytes = [0; 32];
-    gensig_bytes[..].clone_from_slice(&hex::decode(gensig).unwrap());
-    gensig_bytes
+/// Decode the generation signature the pool sent.
+///
+/// It arrives as a hex string, so it can be anything at all: empty, an odd
+/// number of digits, a character that is not hex, the wrong number of bytes.
+/// It used to be decoded with `unwrap()`, which turned a bad answer from the
+/// pool into a panic in the miner's round setup - and with `panic = 'abort'`
+/// that was the end of the miner. With no signature there is no block to scan,
+/// so a failure is refused instead, once, by the caller.
+pub fn decode_gensig(gensig: &str) -> Option<[u8; 32]> {
+    let bytes = hex::decode(gensig).ok()?;
+    let gensig_bytes: [u8; 32] = bytes.try_into().ok()?;
+    Some(gensig_bytes)
 }
 
 pub fn calculate_scoop(height: u64, gensig: &[u8; 32]) -> u32 {
@@ -40,4 +48,21 @@ pub fn find_best_deadline_rust(
         }
     }
     (best_deadline, best_offset as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_gensig;
+
+    /// The pool's string is not to be trusted, so the refusal has to be a
+    /// value, not a panic.
+    #[test]
+    fn decode_gensig_refuses_bad_signatures() {
+        assert!(decode_gensig("").is_none());
+        assert!(decode_gensig("zz").is_none());
+        assert!(decode_gensig("abc").is_none(), "odd number of digits");
+        assert!(decode_gensig(&"ab".repeat(31)).is_none(), "too short");
+        assert!(decode_gensig(&"ab".repeat(33)).is_none(), "too long");
+        assert!(decode_gensig(&"ab".repeat(32)).is_some());
+    }
 }
