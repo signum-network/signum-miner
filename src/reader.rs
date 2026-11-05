@@ -1,5 +1,4 @@
 use crate::miner::Buffer;
-#[cfg(feature = "opencl")]
 use crate::miner::CpuBuffer;
 use crate::plot::{Meta, Plot};
 use crate::utils::new_thread_pool;
@@ -8,8 +7,10 @@ use crossbeam_channel::{Receiver, Sender};
 use pbr::{ProgressBar, Units};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use std::io;
 use std::io::Stdout;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use stopwatch::Stopwatch;
 
 pub struct BufferInfo {
@@ -40,6 +41,9 @@ pub struct Reader {
     interupts: Vec<Sender<()>>,
     show_progress: bool,
     show_drive_stats: bool,
+    /// How long a single chunk read may take before the drive is given up on
+    /// for the round.
+    read_timeout: Duration,
 }
 
 impl Reader {
@@ -55,6 +59,7 @@ impl Reader {
         show_drive_stats: bool,
         thread_pinning: bool,
         benchmark: bool,
+        read_timeout: Duration,
     ) -> Reader {
         if !benchmark {
             check_overlap(&drive_id_to_plots);
@@ -71,6 +76,7 @@ impl Reader {
             interupts: Vec::new(),
             show_progress,
             show_drive_stats,
+            read_timeout,
         }
     }
 
@@ -183,6 +189,7 @@ impl Reader {
         let tx_read_replies_cpu = self.tx_read_replies_cpu.clone();
         #[cfg(feature = "opencl")]
         let tx_read_replies_gpu = self.tx_read_replies_gpu.clone();
+        let read_timeout = self.read_timeout;
 
         (tx_interupt, move || {
             let mut sw = Stopwatch::new();
@@ -204,18 +211,51 @@ impl Reader {
                         sw.restart();
                     }
                     let mut_bs = buffer.get_buffer_for_writing();
-                    let mut bs = mut_bs.lock().unwrap();
-                    let (bytes_read, start_nonce, next_plot) = match p.read(&mut bs, scoop) {
-                        Ok(x) => x,
-                        Err(e) => {
-                            error!(
-                                "reader: error reading chunk from {}: {} -> skip one round",
-                                p.meta.name, e
-                            );
-                            buffer.unmap();
-                            (0, 0, true)
-                        }
-                    };
+                    let buffer_cap = mut_bs.lock().unwrap().capacity();
+                    let (bytes_read, start_nonce, next_plot) =
+                        match p.read_timed(mut_bs.clone(), scoop, read_timeout) {
+                            Ok(x) => x,
+                            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                                error!(
+                                    "reader: read on {} did not return within {}s -> giving up \
+                                     on this drive for this round",
+                                    p.meta.name,
+                                    read_timeout.as_secs()
+                                );
+                                // The read thread is still stuck in the driver and
+                                // holds the buffer; the buffer is lost with it.
+                                // Report the drive as finished - with a fresh buffer
+                                // to replace the lost one - so the round can close
+                                // instead of waiting forever.
+                                drop(buffer);
+                                tx_read_replies_cpu
+                                    .send(ReadReply {
+                                        buffer: Box::new(CpuBuffer::new(buffer_cap))
+                                            as Box<dyn Buffer + Send>,
+                                        info: BufferInfo {
+                                            len: 0,
+                                            height,
+                                            block,
+                                            base_target,
+                                            gensig: gensig.clone(),
+                                            start_nonce: 0,
+                                            finished: true,
+                                            account_id: 0,
+                                            gpu_signal: 0,
+                                        },
+                                    })
+                                    .expect("failed to send read data to CPU thread");
+                                break 'outer;
+                            }
+                            Err(e) => {
+                                error!(
+                                    "reader: error reading chunk from {}: {} -> skip one round",
+                                    p.meta.name, e
+                                );
+                                buffer.unmap();
+                                (0, 0, true)
+                            }
+                        };
 
                     if rx_interupt.try_recv().is_ok() {
                         buffer.unmap();

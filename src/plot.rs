@@ -1,4 +1,5 @@
 use crate::utils::get_sector_size;
+use crossbeam_channel;
 use rand::prelude::*;
 use std::cmp::{max, min};
 use std::error::Error;
@@ -7,6 +8,8 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 const SCOOPS_IN_NONCE: u64 = 4096;
 const SHABAL256_HASH_SIZE: u64 = 32;
@@ -208,6 +211,70 @@ impl Plot {
             //         &mut bs[i..(i + min(read_chunk_size_in_nonces, bytes_to_read - i))],
             //     )?;
             // }
+        }
+        self.read_offset += bytes_to_read as u64;
+
+        Ok((bytes_to_read, start_nonce, finished))
+    }
+
+    /// Reads the next chunk, but gives up after `timeout` if the disk does not
+    /// answer. A read that hangs - a bad sector on a dying drive - used to block
+    /// the drive task for good, and the round never closed. The read runs on its
+    /// own thread so the caller can walk away from it; the thread is abandoned
+    /// (it is stuck in the driver) and the buffer it was filling is lost with it.
+    pub fn read_timed(
+        &mut self,
+        bs: Arc<Mutex<Vec<u8>>>,
+        scoop: u32,
+        timeout: Duration,
+    ) -> Result<(usize, u64, bool), io::Error> {
+        let read_offset = self.read_offset;
+        let buffer_cap = bs.lock().unwrap().capacity();
+        let start_nonce = self.meta.start_nonce + self.read_offset / 64;
+
+        let (bytes_to_read, finished) =
+            if read_offset as usize + buffer_cap >= (SCOOP_SIZE * self.meta.nonces) as usize {
+                let mut bytes_to_read =
+                    (SCOOP_SIZE * self.meta.nonces) as usize - self.read_offset as usize;
+                if self.use_direct_io {
+                    let r = bytes_to_read % self.sector_size as usize;
+                    if r != 0 {
+                        bytes_to_read -= r;
+                    }
+                }
+
+                (bytes_to_read, true)
+            } else {
+                (buffer_cap as usize, false)
+            };
+
+        let offset = self.read_offset;
+        let nonces = self.meta.nonces;
+        let seek_addr =
+            SeekFrom::Start(offset as u64 + u64::from(scoop) * nonces as u64 * SCOOP_SIZE);
+
+        if !self.dummy {
+            // A clone of the handle, not the handle itself: the read thread may
+            // be abandoned, and the plot must stay usable by the next round.
+            let mut fh = self.fh.try_clone()?;
+            let (tx, rx) = crossbeam_channel::bounded(1);
+            std::thread::spawn(move || {
+                let mut bs = bs.lock().unwrap();
+                let r = fh
+                    .seek(seek_addr)
+                    .and_then(|_| fh.read_exact(&mut bs[0..bytes_to_read]));
+                let _ = tx.send(r);
+            });
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("read did not return within {}s", timeout.as_secs()),
+                    ))
+                }
+            }
         }
         self.read_offset += bytes_to_read as u64;
 

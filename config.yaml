@@ -12,6 +12,8 @@ url: 'https://pool.burstcoin.ro'      # mainnet pool
 hdd_reader_thread_count: 0            # default 0 (=auto: number of disks)
 hdd_use_direct_io: true               # default true
 hdd_wakeup_after: 240                 # default 240s
+hdd_read_timeout_ms: 30000            # default 30000; give up on a drive whose read
+                                      # hangs this long instead of stalling the round
 
 cpu_threads: 4                        # default 4 (0=auto: number of logical cpu cores)
 cpu_worker_task_count: 4              # default 4 (0=GPU only)

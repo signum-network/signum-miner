@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use std::u64;
 use stopwatch::Stopwatch;
 use tokio::runtime::Handle;
@@ -450,6 +451,7 @@ impl Miner {
                 cfg.show_drive_stats,
                 cfg.cpu_thread_pinning,
                 cfg.benchmark_cpu(),
+                Duration::from_millis(cfg.hdd_read_timeout_ms),
             ),
             rx_nonce_data,
             target_deadline: cfg.target_deadline,
