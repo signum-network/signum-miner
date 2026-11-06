@@ -23,7 +23,7 @@ use tokio_stream::wrappers::ReceiverStream;
 #[cfg(feature = "opencl")]
 use ocl_core::Mem;
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::process;
@@ -452,6 +452,7 @@ impl Miner {
                 cfg.cpu_thread_pinning,
                 cfg.benchmark_cpu(),
                 Duration::from_millis(cfg.hdd_read_timeout_ms),
+                Arc::new(Mutex::new(HashSet::<String>::new())),
             ),
             rx_nonce_data,
             target_deadline: cfg.target_deadline,

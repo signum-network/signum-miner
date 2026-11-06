@@ -6,7 +6,7 @@ use crossbeam_channel;
 use crossbeam_channel::{Receiver, Sender};
 use pbr::{ProgressBar, Units};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::io::Stdout;
 use std::sync::{Arc, Mutex};
@@ -44,6 +44,9 @@ pub struct Reader {
     /// How long a single chunk read may take before the drive is given up on
     /// for the round.
     read_timeout: Duration,
+    /// Plots whose reads hung during a round, so later rounds skip them
+    /// instead of losing a buffer on them again.
+    bad_plots: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Reader {
@@ -60,6 +63,7 @@ impl Reader {
         thread_pinning: bool,
         benchmark: bool,
         read_timeout: Duration,
+        bad_plots: Arc<Mutex<HashSet<String>>>,
     ) -> Reader {
         if !benchmark {
             check_overlap(&drive_id_to_plots);
@@ -77,6 +81,7 @@ impl Reader {
             show_progress,
             show_drive_stats,
             read_timeout,
+            bad_plots,
         }
     }
 
@@ -190,6 +195,7 @@ impl Reader {
         #[cfg(feature = "opencl")]
         let tx_read_replies_gpu = self.tx_read_replies_gpu.clone();
         let read_timeout = self.read_timeout;
+        let bad_plots = self.bad_plots.clone();
 
         (tx_interupt, move || {
             let mut sw = Stopwatch::new();
@@ -198,6 +204,11 @@ impl Reader {
             let plot_count = plots.len();
             'outer: for (i_p, p) in plots.iter().enumerate() {
                 let mut p = p.lock().unwrap();
+                if bad_plots.lock().unwrap().contains(&p.meta.name) {
+                    // This plot already hung once; drop it and keep the drive
+                    // scanning its remaining plots instead of dropping the drive.
+                    continue 'outer;
+                }
                 if let Err(e) = p.prepare(scoop) {
                     error!(
                         "reader: error preparing {} for reading: {} -> skip one round",
@@ -217,35 +228,18 @@ impl Reader {
                             Ok(x) => x,
                             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                                 error!(
-                                    "reader: read on {} did not return within {}s -> giving up \
-                                     on this drive for this round",
+                                    "reader {}: read on {} did not return within {}s -> skipping \
+                                     its plot for this round",
+                                    drive,
                                     p.meta.name,
                                     read_timeout.as_secs()
                                 );
-                                // The read thread is still stuck in the driver and
-                                // holds the buffer; the buffer is lost with it.
-                                // Report the drive as finished - with a fresh buffer
-                                // to replace the lost one - so the round can close
-                                // instead of waiting forever.
-                                drop(buffer);
-                                tx_read_replies_cpu
-                                    .send(ReadReply {
-                                        buffer: Box::new(CpuBuffer::new(buffer_cap))
-                                            as Box<dyn Buffer + Send>,
-                                        info: BufferInfo {
-                                            len: 0,
-                                            height,
-                                            block,
-                                            base_target,
-                                            gensig: gensig.clone(),
-                                            start_nonce: 0,
-                                            finished: true,
-                                            account_id: 0,
-                                            gpu_signal: 0,
-                                        },
-                                    })
-                                    .expect("failed to send read data to CPU thread");
-                                break 'outer;
+                                // The read thread is stuck in the driver and holds
+                                // the buffer; it is lost with it. Skip this plot - the
+                                // corrupted nonce range is dropped - and keep the drive
+                                // scanning its remaining plots.
+                                bad_plots.lock().unwrap().insert(p.meta.name.clone());
+                                continue 'outer;
                             }
                             Err(e) => {
                                 error!(
