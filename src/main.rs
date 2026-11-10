@@ -156,7 +156,7 @@ async fn main() {
     info!("GPU extensions: OpenCL");
 
     #[cfg(feature = "opencl")]
-    if matches.contains_id("opencl") {
+    if matches.get_flag("opencl") {
         ocl::platform_info();
         process::exit(0);
     }

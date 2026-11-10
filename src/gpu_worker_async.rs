@@ -3,10 +3,9 @@ use crate::ocl::GpuContext;
 use crate::ocl::{gpu_hash, gpu_transfer, gpu_transfer_and_hash};
 use crate::reader::{BufferInfo, ReadReply};
 use crossbeam_channel::{Receiver, Sender};
-use futures::sync::mpsc;
-use futures::{Future, Sink};
 use std::sync::Arc;
 use std::u64;
+use tokio::sync::mpsc;
 
 pub fn create_gpu_worker_task_async(
     benchmark: bool,
@@ -15,7 +14,7 @@ pub fn create_gpu_worker_task_async(
     tx_nonce_data: mpsc::Sender<NonceData>,
     context_mu: Arc<GpuContext>,
     num_drives: usize,
-) -> impl FnOnce() {
+) -> impl FnOnce() + Send + 'static {
     move || {
         let mut new_round = true;
         let mut last_buffer_a = None;
@@ -42,7 +41,7 @@ pub fn create_gpu_worker_task_async(
                     let deadline = u64::MAX;
                     tx_nonce_data
                         .clone()
-                        .send(NonceData {
+                        .blocking_send(NonceData {
                             height: read_reply.info.height,
                             block: read_reply.info.block,
                             base_target: read_reply.info.base_target,
@@ -51,7 +50,6 @@ pub fn create_gpu_worker_task_async(
                             reader_task_processed: read_reply.info.finished,
                             account_id: read_reply.info.account_id,
                         })
-                        .wait()
                         .expect("GPU async worker failed to send nonce data");
                 }
                 tx_empty_buffers
@@ -89,7 +87,7 @@ pub fn create_gpu_worker_task_async(
 
                     tx_nonce_data
                         .clone()
-                        .send(NonceData {
+                        .blocking_send(NonceData {
                             height: last_buffer_info_a.height,
                             block: last_buffer_info_a.block,
                             base_target: last_buffer_info_a.base_target,
@@ -98,7 +96,6 @@ pub fn create_gpu_worker_task_async(
                             reader_task_processed: last_buffer_info_a.finished,
                             account_id: last_buffer_info_a.account_id,
                         })
-                        .wait()
                         .expect("GPU async worker failed to send nonce data");
                     if let Ok(sink_buffer) = rx_sink.try_recv() {
                         tx_empty_buffers
@@ -130,7 +127,7 @@ pub fn create_gpu_worker_task_async(
 
                 tx_nonce_data
                     .clone()
-                    .send(NonceData {
+                    .blocking_send(NonceData {
                         height: last_buffer_info_a.height,
                         block: last_buffer_info_a.block,
                         base_target: last_buffer_info_a.base_target,
@@ -139,7 +136,6 @@ pub fn create_gpu_worker_task_async(
                         reader_task_processed: last_buffer_info_a.finished,
                         account_id: last_buffer_info_a.account_id,
                     })
-                    .wait()
                     .expect("GPU async worker failed to cue empty buffer");
                 if let Ok(sink_buffer) = rx_sink.try_recv() {
                     tx_empty_buffers
