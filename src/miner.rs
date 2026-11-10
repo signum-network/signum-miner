@@ -23,12 +23,13 @@ use tokio_stream::wrappers::ReceiverStream;
 #[cfg(feature = "opencl")]
 use ocl_core::Mem;
 use std::cmp::{max, min};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use std::u64;
 use stopwatch::Stopwatch;
 use tokio::runtime::Handle;
@@ -126,6 +127,12 @@ pub struct NonceData {
 pub trait Buffer {
     fn get_buffer(&mut self) -> Arc<Mutex<Vec<u8>>>;
     fn get_buffer_for_writing(&mut self) -> Arc<Mutex<Vec<u8>>>;
+    /// A fresh, empty buffer of the same kind and size.
+    ///
+    /// Used when a read is given up on: the buffer it was filling stays locked
+    /// inside the abandoned read, so it can never be reused. The reader puts a
+    /// replacement of the same kind back into the pool instead of losing one.
+    fn replacement(&self) -> Box<dyn Buffer + Send>;
     #[cfg(feature = "opencl")]
     fn get_gpu_buffers(&self) -> Option<&GpuBuffer>;
     #[cfg(feature = "opencl")]
@@ -136,6 +143,7 @@ pub trait Buffer {
 
 pub struct CpuBuffer {
     data: Arc<Mutex<Vec<u8>>>,
+    len: usize,
 }
 
 impl CpuBuffer {
@@ -160,6 +168,7 @@ impl CpuBuffer {
 
         CpuBuffer {
             data: Arc::new(Mutex::new(data)),
+            len: buffer_size,
         }
     }
 }
@@ -170,6 +179,9 @@ impl Buffer for CpuBuffer {
     }
     fn get_buffer_for_writing(&mut self) -> Arc<Mutex<Vec<u8>>> {
         self.data.clone()
+    }
+    fn replacement(&self) -> Box<dyn Buffer + Send> {
+        Box::new(CpuBuffer::new(self.len))
     }
     #[cfg(feature = "opencl")]
     fn get_gpu_buffers(&self) -> Option<&GpuBuffer> {
@@ -450,6 +462,8 @@ impl Miner {
                 cfg.show_drive_stats,
                 cfg.cpu_thread_pinning,
                 cfg.benchmark_cpu(),
+                Duration::from_millis(cfg.hdd_read_timeout_ms),
+                Arc::new(Mutex::new(HashSet::<String>::new())),
             ),
             rx_nonce_data,
             target_deadline: cfg.target_deadline,

@@ -1,15 +1,17 @@
 use crate::miner::Buffer;
 #[cfg(feature = "opencl")]
 use crate::miner::CpuBuffer;
-use crate::plot::{Meta, Plot};
+use crate::plot::{Meta, Plot, ReadWorker};
 use crate::utils::new_thread_pool;
 use crossbeam_channel;
 use crossbeam_channel::{Receiver, Sender};
 use pbr::{ProgressBar, Units};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io;
 use std::io::Stdout;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use stopwatch::Stopwatch;
 
 pub struct BufferInfo {
@@ -40,6 +42,12 @@ pub struct Reader {
     interupts: Vec<Sender<()>>,
     show_progress: bool,
     show_drive_stats: bool,
+    /// How long a single plot open or chunk read may take before its plot is
+    /// skipped for the round.
+    read_timeout: Duration,
+    /// Plots whose reads hung, so later rounds skip them instead of paying
+    /// another timeout on them every round.
+    bad_plots: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Reader {
@@ -55,6 +63,8 @@ impl Reader {
         show_drive_stats: bool,
         thread_pinning: bool,
         benchmark: bool,
+        read_timeout: Duration,
+        bad_plots: Arc<Mutex<HashSet<String>>>,
     ) -> Reader {
         if !benchmark {
             check_overlap(&drive_id_to_plots);
@@ -71,6 +81,8 @@ impl Reader {
             interupts: Vec::new(),
             show_progress,
             show_drive_stats,
+            read_timeout,
+            bad_plots,
         }
     }
 
@@ -183,19 +195,45 @@ impl Reader {
         let tx_read_replies_cpu = self.tx_read_replies_cpu.clone();
         #[cfg(feature = "opencl")]
         let tx_read_replies_gpu = self.tx_read_replies_gpu.clone();
+        let read_timeout = self.read_timeout;
+        let bad_plots = self.bad_plots.clone();
 
         (tx_interupt, move || {
             let mut sw = Stopwatch::new();
             let mut elapsed = 0i64;
             let mut nonces_processed = 0u64;
             let plot_count = plots.len();
+            // One read worker per drive: the reads stay on one reused thread
+            // instead of a thread per chunk, and a read that hangs takes only
+            // its own worker with it.
+            let mut worker = ReadWorker::new();
+            let mut finished_sent = false;
+            let mut interrupted = false;
+
             'outer: for (i_p, p) in plots.iter().enumerate() {
                 let mut p = p.lock().unwrap();
-                if let Err(e) = p.prepare(scoop) {
-                    error!(
-                        "reader: error preparing {} for reading: {} -> skip one round",
-                        p.meta.name, e
-                    );
+                if bad_plots.lock().unwrap().contains(&p.meta.name) {
+                    // This plot hung once already. Retrying it would cost
+                    // another timeout on every round, and the round is what a
+                    // share is worth: leave it out and keep the drive.
+                    continue 'outer;
+                }
+                if let Err(e) = p.prepare(&mut worker, scoop, read_timeout) {
+                    if e.kind() == io::ErrorKind::TimedOut {
+                        error!(
+                            "reader {}: opening {} did not return within {}s -> skipping \
+                             this plot",
+                            drive,
+                            p.meta.name,
+                            read_timeout.as_secs()
+                        );
+                        bad_plots.lock().unwrap().insert(p.meta.name.clone());
+                    } else {
+                        error!(
+                            "reader: error preparing {} for reading: {} -> skip one round",
+                            p.meta.name, e
+                        );
+                    }
                     continue 'outer;
                 }
 
@@ -204,26 +242,54 @@ impl Reader {
                         sw.restart();
                     }
                     let mut_bs = buffer.get_buffer_for_writing();
-                    let mut bs = mut_bs.lock().unwrap();
-                    let (bytes_read, start_nonce, next_plot) = match p.read(&mut bs, scoop) {
-                        Ok(x) => x,
-                        Err(e) => {
-                            error!(
-                                "reader: error reading chunk from {}: {} -> skip one round",
-                                p.meta.name, e
-                            );
-                            buffer.unmap();
-                            (0, 0, true)
-                        }
-                    };
+                    let (bytes_read, start_nonce, next_plot) =
+                        match p.read(&mut worker, mut_bs.clone(), scoop, read_timeout) {
+                            Ok(x) => x,
+                            Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                                error!(
+                                    "reader {}: read on {} did not return within {}s -> skipping \
+                                     this plot for the round",
+                                    drive,
+                                    p.meta.name,
+                                    read_timeout.as_secs()
+                                );
+                                // The read worker is still stuck in the driver and
+                                // keeps the buffer it was filling, so that memory can
+                                // never be reused. Leave the plot out and put a fresh
+                                // buffer of the same kind back into the pool, so a
+                                // hung plot does not take a buffer slot with it.
+                                bad_plots.lock().unwrap().insert(p.meta.name.clone());
+                                let replacement = buffer.replacement();
+                                drop(buffer);
+                                let was_interrupted = rx_interupt.try_recv().is_ok();
+                                tx_empty_buffers
+                                    .send(replacement)
+                                    .expect("failed to return a buffer to the pool");
+                                if was_interrupted {
+                                    interrupted = true;
+                                    break 'outer;
+                                }
+                                continue 'outer;
+                            }
+                            Err(e) => {
+                                error!(
+                                    "reader: error reading chunk from {}: {} -> skip one round",
+                                    p.meta.name, e
+                                );
+                                buffer.unmap();
+                                (0, 0, true)
+                            }
+                        };
 
                     if rx_interupt.try_recv().is_ok() {
                         buffer.unmap();
                         tx_empty_buffers.send(buffer).unwrap();
+                        interrupted = true;
                         break 'outer;
                     }
 
                     let finished = i_p == (plot_count - 1) && next_plot;
+                    finished_sent |= finished;
                     // buffer routing
                     #[cfg(feature = "opencl")]
                     match buffer.get_id() {
@@ -333,6 +399,69 @@ impl Reader {
                     if next_plot {
                         break 'inner;
                     }
+                }
+            }
+
+            // A drive that runs out of plots without a finished reply would
+            // leave the round waiting forever, and with `submit_only_best` the
+            // best share is only sent when the round closes. That is what
+            // happens when the last plot hung, or when the plots at the end
+            // were skipped as bad. Report the drive as finished here instead.
+            if !finished_sent && !interrupted && rx_interupt.try_recv().is_err() {
+                // The drive can only be reported finished with a buffer in
+                // hand, and every buffer is either here or on its way back
+                // from a worker, so this waits for one instead of giving up.
+                match rx_empty_buffers.recv() {
+                    Ok(buffer) => {
+                        // A new round may have started while this drive was
+                        // waiting for that buffer: report it as interrupted
+                        // instead of closing the new round with an old signal.
+                        if rx_interupt.try_recv().is_ok() {
+                            let _ = tx_empty_buffers.send(buffer);
+                        } else {
+                            // send termination signal (dummy buffer) to gpu
+                            #[cfg(feature = "opencl")]
+                            for i in 0..tx_read_replies_gpu.as_ref().unwrap().len() {
+                                tx_read_replies_gpu.as_ref().unwrap()[i]
+                                    .send(ReadReply {
+                                        buffer: Box::new(CpuBuffer::new(0))
+                                            as Box<dyn Buffer + Send>,
+                                        info: BufferInfo {
+                                            len: 1,
+                                            height,
+                                            block,
+                                            base_target,
+                                            gensig: gensig.clone(),
+                                            start_nonce: 0,
+                                            finished: false,
+                                            account_id: 0,
+                                            gpu_signal: 2,
+                                        },
+                                    })
+                                    .expect("Error sending 'drive finished' signal to GPU thread");
+                            }
+                            tx_read_replies_cpu
+                                .send(ReadReply {
+                                    buffer,
+                                    info: BufferInfo {
+                                        len: 0,
+                                        height,
+                                        block,
+                                        base_target,
+                                        gensig: gensig.clone(),
+                                        start_nonce: 0,
+                                        finished: true,
+                                        account_id: 0,
+                                        gpu_signal: 0,
+                                    },
+                                })
+                                .expect("failed to send read data to CPU thread");
+                        }
+                    }
+                    Err(e) => warn!(
+                        "reader {}: no buffer to close the round with: {}",
+                        drive, e
+                    ),
                 }
             }
         })

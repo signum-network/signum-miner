@@ -412,6 +412,9 @@ impl Buffer for GpuBuffer {
     fn get_buffer(&mut self) -> Arc<Mutex<Vec<u8>>> {
         self.data.clone()
     }
+    fn replacement(&self) -> Box<dyn Buffer + Send> {
+        Box::new(GpuBuffer::new(&self.context, self.id))
+    }
     fn get_gpu_buffers(&self) -> Option<&GpuBuffer> {
         Some(self)
     }
