@@ -70,6 +70,11 @@ impl RequestHandler {
 
                 match result {
                     Ok(res) => {
+                        log_submission_accepted(
+                            submission_params.account_id,
+                            submission_params.nonce,
+                            submission_params.deadline,
+                        );
                         if submission_params.deadline != res.deadline {
                             log_deadline_mismatch(
                                 submission_params.height,
@@ -77,12 +82,6 @@ impl RequestHandler {
                                 submission_params.nonce,
                                 submission_params.deadline,
                                 res.deadline,
-                            );
-                        } else {
-                            log_submission_accepted(
-                                submission_params.account_id,
-                                submission_params.nonce,
-                                submission_params.deadline,
                             );
                         }
                     }
@@ -160,10 +159,23 @@ fn log_deadline_mismatch(
     deadline: u64,
     deadline_pool: u64,
 ) {
-    error!(
+    // A Signum node echoes hit / base target, which is exactly what the miner
+    // computed, so against a node a mismatch points at a corrupted plot or a
+    // wrong account id / nonce range in a plot file name. Some pools echo the
+    // deadline in their own scale instead; the ratio makes that easy to spot.
+    warn!(
         "submit: deadlines mismatch, height={}, account={}, nonce={}, \
-         deadline_miner={}, deadline_pool={}",
-        height, account_id, nonce, deadline, deadline_pool
+         deadline_miner={}, deadline_pool={}, ratio={:.3}",
+        height,
+        account_id,
+        nonce,
+        deadline,
+        deadline_pool,
+        if deadline > 0 {
+            deadline_pool as f64 / deadline as f64
+        } else {
+            0.0
+        },
     );
 }
 
