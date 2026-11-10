@@ -53,6 +53,18 @@ struct PoolErrorWrapper {
     error: PoolError,
 }
 
+/// Some pools answer with a bare `{"result": "..."}` instead of an error
+/// object, e.g. `{"result": "Deadline exceeds maximum allowed deadline"}` for
+/// a share whose deadline was too high.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PoolResultWrapper {
+    result: String,
+}
+
+/// `PoolError::code` used for a bare `{"result": "..."}` answer.
+pub const POOL_RESULT_CODE: i32 = -1;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolError {
@@ -108,13 +120,77 @@ pub fn parse_json_result<T: DeserializeOwned>(body: &Bytes) -> Result<T, PoolErr
         Ok(x) => Ok(x),
         _ => match serde_json::from_slice::<PoolErrorWrapper>(body) {
             Ok(x) => Err(x.error),
-            _ => {
-                let v = body.to_vec();
-                Err(PoolError {
-                    code: 0,
-                    message: String::from_utf8_lossy(&v).to_string(),
-                })
-            }
+            // A pool can also answer with neither the expected payload nor an
+            // `error` object, but with a bare `{"result": "..."}` - that is
+            // how a refused share is reported. Without this branch such an
+            // answer would surface as an opaque `code: 0` with the whole JSON
+            // as the message.
+            Err(_) => match serde_json::from_slice::<PoolResultWrapper>(body) {
+                Ok(x) => Err(PoolError {
+                    code: POOL_RESULT_CODE,
+                    message: x.result,
+                }),
+                Err(_) => {
+                    let v = body.to_vec();
+                    Err(PoolError {
+                        code: 0,
+                        message: String::from_utf8_lossy(&v).to_string(),
+                    })
+                }
+            },
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+
+    fn body(text: &str) -> Bytes {
+        Bytes::from(text.to_owned())
+    }
+
+    /// `SubmitNonceResponse` has no `Debug`, and the tests need the error more
+    /// than they need `expect_err`.
+    fn error_from(text: &str) -> PoolError {
+        match parse_json_result::<SubmitNonceResponse>(&body(text)) {
+            Ok(_) => panic!("expected an error, got a success: {}", text),
+            Err(err) => err,
+        }
+    }
+
+    #[test]
+    fn parses_the_expected_payload() {
+        let parsed: SubmitNonceResponse =
+            parse_json_result(&body(r#"{"deadline": 12345}"#)).expect("should parse");
+        assert_eq!(parsed.deadline, 12345);
+    }
+
+    #[test]
+    fn parses_an_error_object() {
+        let err = error_from(
+            r#"{"error": {"code": 2, "message": "submission is for different round"}}"#,
+        );
+        assert_eq!(err.code, 2);
+        assert_eq!(err.message, "submission is for different round");
+    }
+
+    #[test]
+    fn parses_a_bare_result_as_a_refused_share() {
+        // What a pool answers to a share whose deadline is too high: HTTP 200
+        // with neither a `deadline` nor an `error` object. Before this answer
+        // was recognised it surfaced as `code: 0` with the whole JSON as the
+        // message.
+        let err = error_from(r#"{"result": "Deadline exceeds maximum allowed deadline"}"#);
+        assert_eq!(err.code, POOL_RESULT_CODE);
+        assert_eq!(err.message, "Deadline exceeds maximum allowed deadline");
+    }
+
+    #[test]
+    fn falls_back_to_the_raw_body() {
+        let err = error_from("not json at all");
+        assert_eq!(err.code, 0);
+        assert_eq!(err.message, "not json at all");
     }
 }
