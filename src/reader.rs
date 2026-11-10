@@ -253,14 +253,21 @@ impl Reader {
                                     p.meta.name,
                                     read_timeout.as_secs()
                                 );
-                                // The read worker is still stuck in the driver and
-                                // keeps the buffer it was filling, so that memory can
-                                // never be reused. Leave the plot out and put a fresh
-                                // buffer of the same kind back into the pool, so a
-                                // hung plot does not take a buffer slot with it.
+                                // The read is still in the driver and is writing
+                                // into this buffer's memory. Releasing it now would
+                                // hand that memory back - for a GPU buffer that means
+                                // releasing pinned OpenCL memory - while the write is
+                                // still in flight. Leak it instead: it stays
+                                // allocated until the process ends, one buffer per
+                                // hung plot, and the bad-plot list keeps that from
+                                // growing round after round. Leave the plot out and
+                                // put a fresh buffer of the same kind back into the
+                                // pool, so a hung plot does not take a buffer slot
+                                // with it.
                                 bad_plots.lock().unwrap().insert(p.meta.name.clone());
                                 let replacement = buffer.replacement();
-                                drop(buffer);
+                                std::mem::forget(mut_bs);
+                                std::mem::forget(buffer);
                                 let was_interrupted = rx_interupt.try_recv().is_ok();
                                 tx_empty_buffers
                                     .send(replacement)
