@@ -61,7 +61,10 @@ impl RequestHandler {
     ) {
         handle.spawn(async move {
             let wrapped_rx = UnboundedReceiverStream::new(rx);
-            let stream = PrioRetry::new(wrapped_rx, Duration::from_secs(3));
+            // Retries back off 3s, 6s, 12s, ... and never wait longer than
+            // 60s, so a share still gets several attempts within a block.
+            let stream =
+                PrioRetry::new(wrapped_rx, Duration::from_secs(3), Duration::from_secs(60));
 
             let mut stream = Box::pin(stream);
             while let Some(submission_params) = stream.as_mut().next().await {
