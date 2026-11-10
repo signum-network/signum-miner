@@ -30,7 +30,7 @@ pub struct SubmitNonceResponse {
 pub struct MiningInfoResponse {
     pub generation_signature: String,
 
-    #[serde(deserialize_with = "from_str_or_int")]
+    #[serde(deserialize_with = "from_str_or_nonzero_int")]
     pub base_target: u64,
 
     #[serde(deserialize_with = "from_str_or_int")]
@@ -101,6 +101,47 @@ where
     }
 
     deserializer.deserialize_any(StringOrIntVisitor)
+}
+
+/// Like `from_str_or_int`, but refuses 0. The miner divides every deadline by
+/// the base target, so a pool answering `baseTarget: 0` would otherwise crash
+/// it with a division by zero. Refusing it here makes such an answer an
+/// unusable mining info like any other.
+fn from_str_or_nonzero_int<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    match from_str_or_int(deserializer)? {
+        0 => Err(de::Error::custom("must not be 0")),
+        v => Ok(v),
+    }
+}
+
+#[cfg(test)]
+mod mining_info_tests {
+    use super::*;
+
+    fn parse(json: &str) -> Result<MiningInfoResponse, PoolError> {
+        parse_json_result(&Bytes::from(json.to_owned()))
+    }
+
+    #[test]
+    fn a_zero_base_target_is_refused() {
+        let gensig = "ab".repeat(32);
+        for base_target in ["0", "\"0\""] {
+            let json = format!(
+                r#"{{"generationSignature": "{}", "baseTarget": {}, "height": 1}}"#,
+                gensig, base_target
+            );
+            assert!(parse(&json).is_err(), "baseTarget {} accepted", base_target);
+        }
+
+        let json = format!(
+            r#"{{"generationSignature": "{}", "baseTarget": "18325193", "height": 1}}"#,
+            gensig
+        );
+        assert_eq!(parse(&json).ok().map(|m| m.base_target), Some(18325193));
+    }
 }
 
 pub fn parse_json_result<T: DeserializeOwned>(body: &Bytes) -> Result<T, PoolError> {
