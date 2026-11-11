@@ -186,6 +186,10 @@ impl Plot {
     /// the drive task for good, and the round never closed. The read runs on
     /// the worker thread so the caller can walk away from it; the worker keeps
     /// the buffer it was filling, so the caller must replace that buffer.
+    ///
+    /// A chunk that timed out is skipped, not read again: the offset moves on
+    /// either way, so the caller can carry on with the rest of the plot at this
+    /// scoop and only the bytes the drive refused are lost.
     pub fn read(
         &mut self,
         worker: &mut ReadWorker,
@@ -219,7 +223,12 @@ impl Plot {
             let fh = self.fh.try_clone()?;
             let seek_addr =
                 read_offset as u64 + u64::from(scoop) * self.meta.nonces as u64 * SCOOP_SIZE;
-            worker.read(fh, seek_addr, bs, bytes_to_read, timeout)?;
+            let result = worker.read(fh, seek_addr, bs, bytes_to_read, timeout);
+            // Advance even when the read failed: the bytes the drive would not
+            // hand over are not worth a second timeout, and every other chunk
+            // of this scoop is still readable.
+            self.skip(bytes_to_read);
+            result?;
             // interrupt avoider (not implemented)
             // let read_chunk_size_in_nonces = 65536;
             // for i in (0..bytes_to_read).step_by(read_chunk_size_in_nonces) {
@@ -227,10 +236,22 @@ impl Plot {
             //         &mut bs[i..(i + min(read_chunk_size_in_nonces, bytes_to_read - i))],
             //     )?;
             // }
+        } else {
+            self.skip(bytes_to_read);
         }
-        self.read_offset += bytes_to_read as u64;
 
         Ok((bytes_to_read, start_nonce, finished))
+    }
+
+    /// Moves past the next `bytes` of this scoop without reading them.
+    fn skip(&mut self, bytes: usize) {
+        self.read_offset += bytes as u64;
+    }
+
+    /// True once every chunk of this scoop has been read or skipped, so there
+    /// is nothing left for this plot to do in the round.
+    pub fn finished(&self) -> bool {
+        self.read_offset >= SCOOP_SIZE * self.meta.nonces
     }
 
     pub fn seek_random(&mut self) -> io::Result<u64> {
@@ -462,6 +483,54 @@ mod tests {
         assert_eq!(&buffer.lock().unwrap()[..], &data[..64]);
 
         fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn a_skipped_chunk_moves_the_plot_on() {
+        // A chunk that timed out must not be read again: the plot moves past it
+        // and keeps going, and only the refused bytes are lost.
+        let nonces = 1000u64;
+        let scoop_len = (SCOOP_SIZE * nonces) as usize;
+        let data: Vec<u8> = (0..scoop_len).map(|i| (i % 239) as u8).collect();
+        let path = temp_plot("124_0_1000", &data);
+        let mut plot = Plot {
+            meta: Meta {
+                account_id: 124,
+                start_nonce: 0,
+                nonces,
+                name: "124_0_1000".to_owned(),
+            },
+            path: path.to_str().unwrap().to_owned(),
+            fh: File::open(&path).unwrap(),
+            read_offset: 0,
+            use_direct_io: false,
+            sector_size: 512,
+            dummy: false,
+        };
+        let mut worker = ReadWorker::new();
+        let timeout = Duration::from_secs(5);
+        plot.prepare(&mut worker, 0, timeout).unwrap();
+
+        let chunk = 25_000usize;
+        let buffer = Arc::new(Mutex::new(vec![0u8; chunk]));
+        plot.read(&mut worker, buffer.clone(), 0, timeout).unwrap();
+        assert!(!plot.finished());
+
+        // This is what the timeout path does with a chunk the drive would not
+        // hand over.
+        plot.skip(chunk);
+        assert!(!plot.finished());
+
+        let (bytes, start_nonce, finished) = plot
+            .read(&mut worker, buffer.clone(), 0, timeout)
+            .unwrap();
+        assert_eq!(bytes, scoop_len - 2 * chunk);
+        assert_eq!(start_nonce, 2 * chunk as u64 / SCOOP_SIZE);
+        assert_eq!(&buffer.lock().unwrap()[..bytes], &data[2 * chunk..]);
+        assert!(finished);
+        assert!(plot.finished());
+
+        fs::remove_file(&path).ok();
     }
 
     #[test]

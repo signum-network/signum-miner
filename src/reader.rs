@@ -280,8 +280,8 @@ impl Reader {
                             Ok(x) => x,
                             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                                 error!(
-                                    "reader {}: read on {} for scoop {} did not return within \
-                                     {}s -> skipping this scoop of the plot",
+                                    "reader {}: a chunk of {} at scoop {} did not return within \
+                                     {}s -> skipping that chunk",
                                     drive,
                                     p.meta.name,
                                     scoop,
@@ -293,11 +293,15 @@ impl Reader {
                                 // releasing pinned OpenCL memory - while the write is
                                 // still in flight. Leak it instead: it stays
                                 // allocated until the process ends, one buffer per
-                                // hung plot, and the bad-scoop list keeps that from
-                                // growing round after round. Leave this scoop of the
-                                // plot out and put a fresh buffer of the same kind
-                                // back into the pool, so a hung read does not take a
-                                // buffer slot with it.
+                                // hung chunk, and the bad-scoop list keeps that from
+                                // growing round after round. Put a fresh buffer of
+                                // the same kind back into the pool, so a hung read
+                                // does not take a buffer slot with it.
+                                //
+                                // The rest of the plot at this scoop is readable:
+                                // the hang came late in the round, after most chunks
+                                // had already been read. Carry on with the next chunk
+                                // instead of dropping the plot for the round.
                                 bad_plots.lock().unwrap().mark(&p.meta.name, scoop);
                                 let replacement = buffer.replacement();
                                 std::mem::forget(mut_bs);
@@ -310,7 +314,12 @@ impl Reader {
                                     interrupted = true;
                                     break 'outer;
                                 }
-                                continue 'outer;
+                                // Nothing left to read: the chunk that hung was
+                                // the last one of this scoop.
+                                if p.finished() {
+                                    break 'inner;
+                                }
+                                continue 'inner;
                             }
                             Err(e) => {
                                 error!(
