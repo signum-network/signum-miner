@@ -30,6 +30,36 @@ pub struct ReadReply {
     pub info: BufferInfo,
 }
 
+/// Plots that hung on a read, per scoop.
+///
+/// A scoop lives at `nonce * NONCE_SIZE + scoop * SCOOP_SIZE`, so a spot of
+/// damage on the disk only touches the scoops whose data sits there: the same
+/// plot reads fine for every other scoop. Keying by scoop therefore keeps the
+/// healthy part of a plot readable instead of throwing the whole plot out for
+/// the rest of the process. A scoop of a given height comes back only after
+/// 4096 blocks, so a hung plot is still not read twice in a row.
+#[derive(Default)]
+pub struct BadPlots {
+    scoops_by_plot: HashMap<String, HashSet<u32>>,
+}
+
+impl BadPlots {
+    pub fn contains(&self, plot: &str, scoop: u32) -> bool {
+        self.scoops_by_plot
+            .get(plot)
+            .map_or(false, |scoops| scoops.contains(&scoop))
+    }
+
+    /// Records that `plot` hung on `scoop`. Returns true if this is new, which
+    /// is what decides whether the log line about the timeout is worth writing.
+    pub fn mark(&mut self, plot: &str, scoop: u32) -> bool {
+        self.scoops_by_plot
+            .entry(plot.to_owned())
+            .or_default()
+            .insert(scoop)
+    }
+}
+
 #[allow(dead_code)]
 pub struct Reader {
     drive_id_to_plots: HashMap<String, Arc<Vec<Mutex<Plot>>>>,
@@ -45,9 +75,9 @@ pub struct Reader {
     /// How long a single plot open or chunk read may take before its plot is
     /// skipped for the round.
     read_timeout: Duration,
-    /// Plots whose reads hung, so later rounds skip them instead of paying
-    /// another timeout on them every round.
-    bad_plots: Arc<Mutex<HashSet<String>>>,
+    /// Plot scoops whose reads hung, so later rounds skip them instead of
+    /// paying another timeout on the same data every round.
+    bad_plots: Arc<Mutex<BadPlots>>,
 }
 
 impl Reader {
@@ -64,7 +94,7 @@ impl Reader {
         thread_pinning: bool,
         benchmark: bool,
         read_timeout: Duration,
-        bad_plots: Arc<Mutex<HashSet<String>>>,
+        bad_plots: Arc<Mutex<BadPlots>>,
     ) -> Reader {
         if !benchmark {
             check_overlap(&drive_id_to_plots);
@@ -212,22 +242,25 @@ impl Reader {
 
             'outer: for (i_p, p) in plots.iter().enumerate() {
                 let mut p = p.lock().unwrap();
-                if bad_plots.lock().unwrap().contains(&p.meta.name) {
-                    // This plot hung once already. Retrying it would cost
-                    // another timeout on every round, and the round is what a
-                    // share is worth: leave it out and keep the drive.
+                if bad_plots.lock().unwrap().contains(&p.meta.name, scoop) {
+                    // This scoop of this plot hung once already. The damage is
+                    // in the data this scoop lives in, so the rest of the plot
+                    // is still worth reading; retrying this scoop would only
+                    // cost another timeout, and the round is what a share is
+                    // worth.
                     continue 'outer;
                 }
                 if let Err(e) = p.prepare(&mut worker, scoop, read_timeout) {
                     if e.kind() == io::ErrorKind::TimedOut {
                         error!(
-                            "reader {}: opening {} did not return within {}s -> skipping \
-                             this plot",
+                            "reader {}: opening {} for scoop {} did not return within {}s -> \
+                             skipping this scoop of the plot",
                             drive,
                             p.meta.name,
+                            scoop,
                             read_timeout.as_secs()
                         );
-                        bad_plots.lock().unwrap().insert(p.meta.name.clone());
+                        bad_plots.lock().unwrap().mark(&p.meta.name, scoop);
                     } else {
                         error!(
                             "reader: error preparing {} for reading: {} -> skip one round",
@@ -247,10 +280,11 @@ impl Reader {
                             Ok(x) => x,
                             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                                 error!(
-                                    "reader {}: read on {} did not return within {}s -> skipping \
-                                     this plot for the round",
+                                    "reader {}: read on {} for scoop {} did not return within \
+                                     {}s -> skipping this scoop of the plot",
                                     drive,
                                     p.meta.name,
+                                    scoop,
                                     read_timeout.as_secs()
                                 );
                                 // The read is still in the driver and is writing
@@ -259,12 +293,12 @@ impl Reader {
                                 // releasing pinned OpenCL memory - while the write is
                                 // still in flight. Leak it instead: it stays
                                 // allocated until the process ends, one buffer per
-                                // hung plot, and the bad-plot list keeps that from
-                                // growing round after round. Leave the plot out and
-                                // put a fresh buffer of the same kind back into the
-                                // pool, so a hung plot does not take a buffer slot
-                                // with it.
-                                bad_plots.lock().unwrap().insert(p.meta.name.clone());
+                                // hung plot, and the bad-scoop list keeps that from
+                                // growing round after round. Leave this scoop of the
+                                // plot out and put a fresh buffer of the same kind
+                                // back into the pool, so a hung read does not take a
+                                // buffer slot with it.
+                                bad_plots.lock().unwrap().mark(&p.meta.name, scoop);
                                 let replacement = buffer.replacement();
                                 std::mem::forget(mut_bs);
                                 std::mem::forget(buffer);
@@ -498,4 +532,45 @@ pub fn check_overlap(drive_id_to_plots: &HashMap<String, Arc<Vec<Mutex<Plot>>>>)
         })
         .count()
         > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BadPlots;
+
+    #[test]
+    fn a_hung_scoop_is_remembered_for_that_plot_only() {
+        let mut bad = BadPlots::default();
+        assert!(!bad.contains("plot_a", 4057));
+
+        assert!(bad.mark("plot_a", 4057));
+        assert!(bad.contains("plot_a", 4057));
+
+        // Another scoop of the same plot lives on the healthy part of the
+        // file, and another plot is untouched.
+        assert!(!bad.contains("plot_a", 1604));
+        assert!(!bad.contains("plot_b", 4057));
+    }
+
+    #[test]
+    fn marking_the_same_scoop_twice_is_not_new() {
+        let mut bad = BadPlots::default();
+        assert!(bad.mark("plot_a", 1247));
+        assert!(!bad.mark("plot_a", 1247));
+        assert_eq!(bad.scoops_by_plot["plot_a"].len(), 1);
+    }
+
+    #[test]
+    fn hung_scoops_accumulate_per_plot() {
+        let mut bad = BadPlots::default();
+        bad.mark("plot_a", 1247);
+        bad.mark("plot_a", 4057);
+        bad.mark("plot_b", 1604);
+
+        assert_eq!(bad.scoops_by_plot["plot_a"].len(), 2);
+        assert_eq!(bad.scoops_by_plot["plot_b"].len(), 1);
+        assert!(bad.contains("plot_a", 4057));
+        assert!(bad.contains("plot_b", 1604));
+        assert!(!bad.contains("plot_b", 4057));
+    }
 }

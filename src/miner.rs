@@ -12,7 +12,7 @@ use crate::ocl::GpuBuffer;
 use crate::ocl::GpuContext;
 use crate::plot::{Plot, SCOOP_SIZE};
 use crate::poc_hashing;
-use crate::reader::Reader;
+use crate::reader::{BadPlots, Reader};
 use crate::requests::RequestHandler;
 use crate::utils::{get_device_id, new_thread_pool};
 use crossbeam_channel;
@@ -23,7 +23,7 @@ use tokio_stream::wrappers::ReceiverStream;
 #[cfg(feature = "opencl")]
 use ocl_core::Mem;
 use std::cmp::{max, min};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::read_dir;
 use std::path::PathBuf;
 use std::process;
@@ -463,7 +463,7 @@ impl Miner {
                 cfg.cpu_thread_pinning,
                 cfg.benchmark_cpu(),
                 Duration::from_millis(cfg.hdd_read_timeout_ms),
-                Arc::new(Mutex::new(HashSet::<String>::new())),
+                Arc::new(Mutex::new(BadPlots::default())),
             ),
             rx_nonce_data,
             target_deadline: cfg.target_deadline,
