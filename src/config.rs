@@ -29,6 +29,9 @@ pub struct Cfg {
     #[serde(default = "default_hdd_wakeup_after")]
     pub hdd_wakeup_after: i64,
 
+    #[serde(default = "default_hdd_read_timeout_ms")]
+    pub hdd_read_timeout_ms: u64,
+
     #[serde(default = "default_cpu_threads")]
     pub cpu_threads: usize,
 
@@ -138,6 +141,14 @@ fn default_hdd_use_direct_io() -> bool {
 
 fn default_hdd_wakeup_after() -> i64 {
     240
+}
+
+/// How long a single chunk read may take before the drive is given up on for
+/// the round. A read that hangs - a bad sector on a dying drive - used to block
+/// the drive task for good, and the round never closed. A healthy read takes
+/// milliseconds, so a generous timeout is safe.
+fn default_hdd_read_timeout_ms() -> u64 {
+    30_000
 }
 
 fn default_cpu_threads() -> usize {
