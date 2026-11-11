@@ -14,6 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use stopwatch::Stopwatch;
 
+/// How many reads in a row may time out on one drive before the drive task
+/// leaves that drive alone for the rest of the round.
+const MAX_TIMEOUTS_IN_A_ROW: u32 = 2;
+
 pub struct BufferInfo {
     pub len: usize,
     pub height: u64,
@@ -239,6 +243,13 @@ impl Reader {
             let mut worker = ReadWorker::new();
             let mut finished_sent = false;
             let mut interrupted = false;
+            // A read that timed out leaves the request in the driver, and the
+            // reads issued after it queue behind that request and time out too.
+            // Reading a second plot after one hang is therefore usually wasted,
+            // and a drive that hangs on several plots in a row would spend the
+            // whole round in 30 s timeouts. Give it two tries, then leave the
+            // drive alone for this round.
+            let mut timeouts_in_a_row = 0u32;
 
             'outer: for (i_p, p) in plots.iter().enumerate() {
                 let mut p = p.lock().unwrap();
@@ -261,6 +272,17 @@ impl Reader {
                             read_timeout.as_secs()
                         );
                         bad_plots.lock().unwrap().mark(&p.meta.name, scoop);
+                        timeouts_in_a_row += 1;
+                        if timeouts_in_a_row >= MAX_TIMEOUTS_IN_A_ROW {
+                            warn!(
+                                "reader {}: {} reads in a row did not return within {}s -> \
+                                 dropping this drive for the round",
+                                drive,
+                                timeouts_in_a_row,
+                                read_timeout.as_secs()
+                            );
+                            break 'outer;
+                        }
                     } else {
                         error!(
                             "reader: error preparing {} for reading: {} -> skip one round",
@@ -277,11 +299,14 @@ impl Reader {
                     let mut_bs = buffer.get_buffer_for_writing();
                     let (bytes_read, start_nonce, next_plot) =
                         match p.read(&mut worker, mut_bs.clone(), scoop, read_timeout) {
-                            Ok(x) => x,
+                            Ok(x) => {
+                                timeouts_in_a_row = 0;
+                                x
+                            }
                             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
                                 error!(
-                                    "reader {}: a chunk of {} at scoop {} did not return within \
-                                     {}s -> skipping that chunk",
+                                    "reader {}: read on {} for scoop {} did not return within \
+                                     {}s -> skipping this scoop of the plot",
                                     drive,
                                     p.meta.name,
                                     scoop,
@@ -293,16 +318,13 @@ impl Reader {
                                 // releasing pinned OpenCL memory - while the write is
                                 // still in flight. Leak it instead: it stays
                                 // allocated until the process ends, one buffer per
-                                // hung chunk, and the bad-scoop list keeps that from
-                                // growing round after round. Put a fresh buffer of
-                                // the same kind back into the pool, so a hung read
-                                // does not take a buffer slot with it.
-                                //
-                                // The rest of the plot at this scoop is readable:
-                                // the hang came late in the round, after most chunks
-                                // had already been read. Carry on with the next chunk
-                                // instead of dropping the plot for the round.
+                                // hung plot, and the bad-scoop list keeps that from
+                                // growing round after round. Leave this scoop of the
+                                // plot out and put a fresh buffer of the same kind
+                                // back into the pool, so a hung read does not take a
+                                // buffer slot with it.
                                 bad_plots.lock().unwrap().mark(&p.meta.name, scoop);
+                                timeouts_in_a_row += 1;
                                 let replacement = buffer.replacement();
                                 std::mem::forget(mut_bs);
                                 std::mem::forget(buffer);
@@ -314,12 +336,17 @@ impl Reader {
                                     interrupted = true;
                                     break 'outer;
                                 }
-                                // Nothing left to read: the chunk that hung was
-                                // the last one of this scoop.
-                                if p.finished() {
-                                    break 'inner;
+                                if timeouts_in_a_row >= MAX_TIMEOUTS_IN_A_ROW {
+                                    warn!(
+                                        "reader {}: {} reads in a row did not return within {}s \
+                                         -> dropping this drive for the round",
+                                        drive,
+                                        timeouts_in_a_row,
+                                        read_timeout.as_secs()
+                                    );
+                                    break 'outer;
                                 }
-                                continue 'inner;
+                                continue 'outer;
                             }
                             Err(e) => {
                                 error!(
